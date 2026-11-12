@@ -2,6 +2,14 @@
 
 本文件记录 `dsh-daily-report` 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 变更
+
+- 报告第二层改为 **「明日待续」置顶**，主线顺延为第二段；Markdown 归档的章节顺序同步调整。
+- 首层的近 7 天 tokens 迷你柱状图改为默认折叠，点「每日 tokens」行展开，首屏更短。
+- README 与 `docs/images` 的早晨卡片截图换成有内容的真实桌面截图，三张演示图随新布局重新生成。
+
 ## [0.3.0] - 2026-11-12
 
 首个公开版本。插件在本地 DSH Desktop 上完成一到三期功能，并做了一轮收尾与重设计。

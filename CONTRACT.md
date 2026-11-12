@@ -230,7 +230,7 @@ export function renderHtml(report, { redact = false } = {}) → string
 // render/markdown.js
 export function renderMarkdown(report) → string
 ```
-- HTML：**单文件**，内联 CSS + 内联 SVG，**无 `<script>`、无外链**（字体用系统字体栈）。第 1 层常显；第 2 层各 section 用 `<details open>`（主线、待续默认展开，其余折叠）；第 3 层附录 `<details>` 默认折叠。暗色/亮色跟随 `prefers-color-scheme`。`redact=true` 时把 cwd、文件路径、域名替换为 `***`（脱敏分享）。
+- HTML：**单文件**，内联 CSS + 内联 SVG，**无 `<script>`、无外链**（字体用系统字体栈）。第 1 层常显，其中近 7 天 tokens 柱状图折叠在 `<details class="spark">` 内、默认收起；第 2 层按 **待续 → 主线 → 用量 → 工具 → 卡点 → 作息 →（周/月概览）** 顺序渲染，每段一个 `<details>`，待续与主线默认展开，其余折叠；第 3 层附录 `<details>` 默认折叠。暗色/亮色跟随 `prefers-color-scheme`。`redact=true` 时把 cwd、文件路径、域名替换为 `***`（脱敏分享）。
 - 所有文本必须 `escapeHtml`。
 - “只写有变化的内容”：section 为 null 就不渲染该段；`layer1.alerts` 为空就不渲染警示行。
 - Markdown：全量，同样的层次；第 2 层用 `## `，附录用 `## 附录`；表格用 GFM。

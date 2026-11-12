@@ -51,6 +51,7 @@ test('daily HTML escapes all report-controlled content and opens only mainline/c
   assert.match(html, /&lt;script&gt;/)
   assert.match(html, /class="sec" open><summary>今日主线/)
   assert.match(html, /class="sec" open><summary>明日待续/)
+  assert.ok(html.indexOf('<summary>明日待续') < html.indexOf('<summary>今日主线'), 'carry-over section must be the first section')
   assert.match(html, /class="sec"><summary>用量与成本/)
   assert.match(html, /▲ \+23%/)
   assert.match(html, /▼ -12%/)

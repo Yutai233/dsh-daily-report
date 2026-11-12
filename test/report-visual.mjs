@@ -67,7 +67,7 @@ try {
           assert.equal(state.blue, theme === 'light' ? 'rgb(65, 118, 230)' : 'rgb(86, 134, 254)')
           assert.equal(state.animations, 0, `${label}: no automatic entrance animation`)
           assert.ok(state.transforms.every(x => x === 'none'), `${label}: no initial transforms`)
-          const expected = ['mainline', 'carryOver'].filter(k => report.sections?.[k] != null).map(k => k === 'mainline' ? '今日主线' : '明日待续')
+          const expected = ['carryOver', 'mainline'].filter(k => report.sections?.[k] != null).map(k => k === 'mainline' ? '今日主线' : '明日待续')
           assert.deepEqual(state.open, expected, `${label}: default open semantics`)
           if (name === 'daily' && motion === 'reduce') await page.screenshot({ path: join(out, `${theme}-${width}.png`), fullPage: true })
           await page.locator('details').evaluateAll(elements => elements.forEach(el => { el.open = true }))
