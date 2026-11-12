@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            node: '22.x'
+          - os: windows-latest
+            node: '24.x'
+          - os: ubuntu-latest
+            node: '24.x'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Rebuild client bundle
+        run: node client/build.mjs
+
+      - name: Bundle must match its source
+        run: git diff --exit-code -- client/client.js
+
+      - name: Run tests
+        # 非 Windows 上缺少键鼠空闲采样等平台能力，对应的真实采样测试自行跳过
+        run: node --test --test-timeout=300000 "test/*.test.mjs"
