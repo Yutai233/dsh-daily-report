@@ -269,7 +269,7 @@ renderHtml(report, { redact: true })
 
 ## 界面截图
 
-README 内嵌的三张图（`docs/images/demo-daily-light.png`、`demo-daily-dark.png`、`demo-weekly-light.png`）**全部由合成数据渲染**，可直接重新生成：
+README 的「界面预览」有四张图：`docs/images/card-welcome.png` 是欢迎页早晨卡片的**真实桌面截图**；另外三张（`demo-daily-light.png`、`demo-daily-dark.png`、`demo-weekly-light.png`）**全部由合成数据渲染**，可直接重新生成：
 
 ```powershell
 node test/gen-docs-images.mjs              # playwright(msedge) 优先，失败时降级到 Edge CLI

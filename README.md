@@ -10,19 +10,6 @@
 
 > **先读这段**：插件默认走 **B 档 · 仅标题 + 统计**，不调用任何模型，会话正文不出本机。报告里仍会包含会话标题、路径、命令和域名——分享前请自己检查。
 
-![日报（浅色）](./docs/images/demo-daily-light.png)
-
-<details>
-<summary>更多截图（深色 / 周报）</summary>
-
-![日报（深色）](./docs/images/demo-daily-dark.png)
-
-![周报](./docs/images/demo-weekly-light.png)
-
-</details>
-
-> 截图由 `test/fixtures/sample-report.mjs` 的合成数据渲染（`node test/gen-docs-images.mjs` 可重新生成），不含任何真实会话内容；显示的是导出的报告页面本身，DSH 内的查看器还会套一层原生弹窗外壳。
-
 ## 特性
 
 | 能力 | 说明 |
@@ -39,6 +26,27 @@
 | 给 agent 读 | Markdown 全量落盘，可选注册 `daily_report` 工具，直接问「昨天做了什么」 |
 
 两条规则贯穿报告：**数字由代码计算，模型只负责写文字**；**没有变化的段落不渲染**。
+
+## 界面预览
+
+欢迎页鲸鱼 logo 上方弹出的早晨卡片（真实桌面截图）：
+
+![早晨卡片](./docs/images/card-welcome.png)
+
+日报与周报（由 `test/fixtures/sample-report.mjs` 的合成数据渲染）：
+
+![日报（浅色）](./docs/images/demo-daily-light.png)
+
+<details>
+<summary>深色日报 / 周报</summary>
+
+![日报（深色）](./docs/images/demo-daily-dark.png)
+
+![周报](./docs/images/demo-weekly-light.png)
+
+</details>
+
+> 卡片图是真实桌面截图；其余三张由合成数据渲染（`node test/gen-docs-images.mjs` 可重新生成），不含任何真实会话内容，展示的是导出的报告页面本身，DSH 内的查看器还会套一层原生弹窗外壳。
 
 ## 安装
 

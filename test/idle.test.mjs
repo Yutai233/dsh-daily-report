@@ -87,7 +87,7 @@ test('readIdleDay：当天没有采样文件时返回 null', async () => {
   }
 })
 
-test('createIdleSampler：真实采样（仅 win32）', { skip: process.platform !== 'win32' }, async () => {
+test('createIdleSampler：真实采样（仅 win32）', { skip: process.platform !== 'win32' }, async (t) => {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'dsh-idle-live-'))
   const logs = []
   const sampler = createIdleSampler({ dataDir, intervalMs: 1000, log: (msg) => logs.push(msg) })
@@ -96,15 +96,33 @@ test('createIdleSampler：真实采样（仅 win32）', { skip: process.platform
     sampler.start() // 幂等：重复调用不应再起一个进程
     assert.equal(sampler.running, true, 'start 后 running 应为 true')
 
-    await sleep(4000)
+    // 拉起 powershell 的延迟因机器而异（CI runner 上 Add-Type 编译可能超过 3 秒），
+    // 所以轮询等采样落盘，而不是假设固定 4 秒就够；上限 30 秒。
+    const file = path.join(dataDir, 'idle', fmtDate(Date.now()) + '.jsonl')
+    const deadline = Date.now() + 30000
+    let lines = []
+    while (Date.now() < deadline) {
+      await sleep(500)
+      lines = await readLines(file)
+      if (lines.length >= 2) break
+      // 启动就失败（如受限沙箱禁止 spawn）时不必等满 30 秒
+      if (lines.length === 0 && logs.some((msg) => /启动 powershell 失败/.test(msg))) break
+    }
+
+    // 环境本身拉不起 powershell（受限沙箱、无交互会话、PowerShell 缺失）时跳过，
+    // 而不是伪装成通过；进程真的起来了才做严格断言。
+    const spawnBlocked = logs.some((msg) => /启动 powershell 失败/.test(msg))
+    if (spawnBlocked) {
+      t.skip('当前会话无法拉起 powershell 采样：' + logs.join(' | '))
+      return
+    }
 
     const idleMs = sampler.lastIdleMs
     assert.ok(
       Number.isInteger(idleMs) && idleMs >= 0,
       'lastIdleMs 应为非负整数，实际：' + String(idleMs) + '（日志：' + logs.join(' | ') + '）',
     )
-    const lines = await readLines(path.join(dataDir, 'idle', fmtDate(Date.now()) + '.jsonl'))
-    assert.ok(lines.length >= 2, '4 秒内应至少落盘 2 条采样，实际 ' + lines.length)
+    assert.ok(lines.length >= 2, '30 秒内应至少落盘 2 条采样，实际 ' + lines.length)
 
     sampler.stop()
     await sleep(500)
