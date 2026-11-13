@@ -2,6 +2,12 @@
 
 本文件记录 `dsh-daily-report` 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.2] - 2026-11-13
+
+### 变更
+
+- README「界面预览」的早晨卡片换成新的真实桌面截图：卡片在欢迎页鲸鱼上方展开，含「每日意外发现」与「明日待续 → 相关会话」入口。无功能改动，仅文档与截图。
+
 ## [0.3.1] - 2026-11-13
 
 ### 新增
@@ -66,3 +72,4 @@
 
 [0.3.0]: https://github.com/Yutai233/dsh-daily-report/releases/tag/v0.3.0
 [0.3.1]: https://github.com/Yutai233/dsh-daily-report/releases/tag/v0.3.1
+[0.3.2]: https://github.com/Yutai233/dsh-daily-report/releases/tag/v0.3.2

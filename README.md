@@ -3,7 +3,7 @@
 把本机的 DSH 会话整理成一份能快速读完的简报：今天做了哪些事、用了多少 token、花了多少钱、哪里卡住、明天接着做什么，外加天气、dsh 启停时间和作息提醒。
 
 [![CI](https://github.com/Yutai233/dsh-daily-report/actions/workflows/ci.yml/badge.svg)](https://github.com/Yutai233/dsh-daily-report/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-0.3.1-blue)
+![version](https://img.shields.io/badge/version-0.3.2-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![dsh](https://img.shields.io/badge/dsh-%E2%89%A5%200.2.2--rc.1-4A4AFF)
 ![node](https://img.shields.io/badge/node-%E2%89%A5%2022.15-339933)
@@ -30,9 +30,9 @@
 
 ## 界面预览
 
-欢迎页鲸鱼 logo 上方弹出的早晨卡片（真实桌面截图）：
+欢迎页鲸鱼 logo 上方弹出的早晨卡片（真实桌面截图，含「每日意外发现」与「明日待续 → 相关会话」入口）：
 
-![早晨卡片](./docs/images/card-welcome.png)
+![每日简报早晨卡片（真实桌面截图）](./docs/images/card-welcome.png)
 
 日报与周报（由 `test/fixtures/sample-report.mjs` 的合成数据渲染）：
 
