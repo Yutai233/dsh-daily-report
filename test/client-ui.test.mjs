@@ -172,12 +172,42 @@ test('morning card retains all six carry-over items and has a keyboard scroll re
   const tree = render(api.MorningCard, { store, anchorRef: { current: null }, onClose() {} });
   assert.match(text(tree), /明日待续 · 6/);
   assert.ok(text(tree).includes(card.layer1.oneLiner));
-  for (const item of carryOver) { assert.ok(text(tree).includes(item.text)); assert.ok(text(tree).includes(item.title)); }
+  for (const item of carryOver) { assert.ok(text(tree).includes(item.text)); assert.ok(!text(tree).includes(item.title), '来源会话标题不再显示在待办下面'); }
   assert.doesNotMatch(text(tree), /旧版主线/);
   assert.equal(nodes(tree).find(n => n.props.className === 'ddr-card-scroll').props.tabIndex, 0);
   card.carryOver = [];
   const empty = render(api.MorningCard, { store, anchorRef: { current: null }, onClose() {} });
   assert.doesNotMatch(text(empty), /旧版主线/);
+});
+
+test('festival day swaps the carry-over title for a themed pill and keeps the list', () => {
+  global.document = { body: {} };
+  const { api, render } = harness();
+  const theme = { bg: '#ffffff', fg: '#c62828', border: '#c62828', deco: 'repeating-linear-gradient(135deg, rgba(198,40,40,.16) 0 4px, transparent 4px 10px)' };
+  const festival = { id: 'xmas', name: '圣诞', emoji: '🎄', greeting: '圣诞快乐，早点歇。', badge: '🎄 圣诞', theme };
+  const card = { key: '2026-12-25', label: '12月25日 周五', layer1: { carryOverCount: 2, festival }, carryOver: [{ kind: 'todo', text: '写测试' }] };
+  const state = { config: {}, card };
+  const tree = render(api.MorningCard, { store: mockStore(state), anchorRef: { current: null }, onClose() {} });
+  assert.match(text(tree), /🎄 圣诞/);
+  assert.match(text(tree), /圣诞快乐，早点歇。/);
+  assert.doesNotMatch(text(tree), /明日待续/);
+  const pill = nodes(tree).find((n) => n.props.className === 'ddr-fest');
+  assert.ok(pill, 'the themed pill is rendered');
+  assert.equal(pill.props.style.background, '#ffffff');
+  assert.equal(pill.props.style.color, '#c62828');
+  assert.equal(pill.props.style.borderColor, '#c62828');
+  assert.match(pill.props.style.backgroundImage, /repeating-linear-gradient/);
+  assert.ok(text(tree).includes('写测试'), 'carry-over list survives the swap');
+  // 节日当天没有待续时，胶囊也单独出现
+  card.carryOver = [];
+  assert.match(text(render(api.MorningCard, { store: mockStore(state), anchorRef: { current: null }, onClose() {} })), /🎄 圣诞/);
+  // 无节日 / 关掉开关 → 回退「明日待续 · N」
+  card.layer1 = { carryOverCount: 2 };
+  card.carryOver = [{ kind: 'todo', text: '写测试' }];
+  assert.match(text(render(api.MorningCard, { store: mockStore(state), anchorRef: { current: null }, onClose() {} })), /明日待续 · 1/);
+  // 没有高度对应 emoji 的节日
+  card.layer1 = { festival: { badge: '清明', greeting: '清明，出去走走。', theme: {} } };
+  assert.match(text(render(api.MorningCard, { store: mockStore(state), anchorRef: { current: null }, onClose() {} })), /清明/);
 });
 
 test('report directory form edits only reportsDir and supports restoring default', async () => {

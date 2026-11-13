@@ -108,6 +108,15 @@ function makeStore(connection, navigateSession) {
 /* ---------------------------------------------------------------- helpers */
 
 const PRIVACY_LABEL = { cloud: '云端模型摘要', 'local-only': '仅统计（不出本机）', 'local-model': '本地模型摘要' };
+// 节日胶囊：主题色来自 lib/collect/festival.js 的 theme（底色 / 字色 / 描边 / 可选纹理），
+// 没主题的节日在白底上仍是白底，这是有意的——胶囊要跳出来。
+const festStyle = (f) => {
+  const t = (f && f.theme) || {};
+  const s = { borderWidth: 1, borderStyle: 'solid', borderColor: t.border || '#d1d5db', background: t.bg || '#ffffff', color: t.fg || '#3a3a3a' };
+  if (t.deco) s.backgroundImage = t.deco;
+  if (t.mono) s.fontFamily = 'ui-monospace,SFMono-Regular,Menlo,Consolas,"Cascadia Mono","Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",monospace';
+  return s;
+};
 const fmtClock = (ms) => { const d = new Date(ms); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
 const fmtBytes = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n > 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
 
@@ -370,10 +379,14 @@ function MorningCard({ store, anchorRef, onClose }) {
         alertItems.map((a, i) => h('span', { key: i, className: 'ddr-alert' }, '⚠ ' + a)),
         usageNode) : null,
       typeof l1.discovery === 'string' && l1.discovery.trim() ? h('aside', { className: 'ddr-discovery', 'aria-label': '每日发现' }, h('b', null, '每日发现：'), l1.discovery) : null,
-      card.carryOver && card.carryOver.length ? h('div', { className: 'ddr-carry' },
-        h('h4', null, '明日待续 · ' + card.carryOver.length),
-        h('div', { ref: carryRef, className: 'ddr-carry-scroll', tabIndex: 0, role: 'region', 'aria-label': '明日待续列表' },
-          h('ul', { className: 'ddr-list' }, card.carryOver.map((c, i) => h('li', { key: i }, h('span', null, c.kind === 'todo' ? '待办' : '中断'), h('span', null, c.text, typeof c.sessionId === 'string' && c.sessionId.trim() ? h('button', { type: 'button', className: 'ddr-session-link', title: c.title ? '打开会话：' + c.title : '打开来源会话', onClick: () => store.openSession(c.sessionId) }, '相关会话') : null, c.title ? h('small', { className: 'ddr-carry-source' }, c.title) : null)))))) : null,
+      (l1.festival || (card.carryOver && card.carryOver.length)) ? h('div', { className: 'ddr-carry' },
+        l1.festival
+          ? h('h4', { className: 'ddr-fest-row' },
+            h('span', { className: 'ddr-fest', style: festStyle(l1.festival), title: '节日彩蛋' }, l1.festival.badge),
+            h('span', { className: 'ddr-fest-note' }, l1.festival.greeting))
+          : h('h4', null, '明日待续 · ' + card.carryOver.length),
+        card.carryOver && card.carryOver.length ? h('div', { ref: carryRef, className: 'ddr-carry-scroll', tabIndex: 0, role: 'region', 'aria-label': '明日待续列表' },
+          h('ul', { className: 'ddr-list' }, card.carryOver.map((c, i) => h('li', { key: i }, h('span', null, c.kind === 'todo' ? '待办' : '中断'), h('span', null, c.text, typeof c.sessionId === 'string' && c.sessionId.trim() ? h('button', { type: 'button', className: 'ddr-session-link', title: c.title ? '打开会话：' + c.title : '打开来源会话', onClick: () => store.openSession(c.sessionId) }, '相关会话') : null))))) : null) : null,
       h('div', { className: 'ddr-actions' },
         h('span', { className: 'ddr-meta' }, PRIVACY_LABEL[st.config.privacy] || '',
           card.gen ? h('span', { className: 'ddr-gen', title: '生成本次简报消耗的 token 与费用' }, ' · ' + (card.gen.estimated ? '生成约 ' : '生成 ') + card.gen.tokens + ' tokens（' + card.gen.cny + '）') : null),
@@ -689,6 +702,8 @@ function SettingsSection({ store }) {
           h('span', null, k),
           h('button', { type: 'button', className: 'ddr-link', 'aria-label': '查看报告 ' + k, onClick: (e) => store.view(tab, k, k, e.currentTarget) }, '查看'),
           h('button', { type: 'button', className: 'ddr-link', 'aria-label': '在浏览器打开 ' + k, onClick: () => store.open(tab, k) }, '浏览器打开'))) : h('p', { className: 'ddr-note' }, '暂无')),
+      h(Row, { title: '节日彩蛋', desc: '节日当天，卡片上的「明日待续」位置换成一颗主题胶囊（如 🎄 圣诞），后面跟一句 10 字以内的祝福。纯本地查表，不调模型、不联网；关掉后整块不出现。' },
+        h(Switch, { checked: cfg.festival !== false, label: '节日彩蛋', onChange: (v) => patch({ festival: v }) })),
       h(Row, { title: '保留天数', desc: '更早的原始采样、事实与日报会被清理。' },
         h(NumberInput, { label: '报告保留天数', value: cfg.retentionDays, min: 7, max: 3650, onCommit: (v) => patch({ retentionDays: v }) }), h('span', { className: 'ddr-note' }, '天'))),
 

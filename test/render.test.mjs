@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { renderHtml } from '../lib/render/html.js'
 import { renderMarkdown } from '../lib/render/markdown.js'
+import { festivalOf } from '../lib/collect/festival.js'
 import { sampleDaily, sampleWeekly, sampleEmpty } from './fixtures/sample-report.mjs'
 
 for (const [name, report] of Object.entries({ daily: sampleDaily, weekly: sampleWeekly, empty: sampleEmpty })) {
@@ -125,6 +126,23 @@ test('discovery follows the overview only when present; session controls are DSH
     assert.doesNotMatch(renderHtml(r), /<aside class="discovery"/);
     assert.doesNotMatch(renderMarkdown(r), /\*\*每日发现：\*\*/);
   }
+});
+
+test('festival pill renders only on festival days, with escaped content', () => {
+  const r = structuredClone(sampleDaily);
+  r.layer1.festival = festivalOf('2026-12-25');
+  const html = renderHtml(r);
+  assert.ok(html.indexOf('</header>') < html.indexOf('class="festival"'), 'festival sits below the header');
+  assert.match(html, /<p class="festival" aria-label="节日彩蛋"><span class="fest" style="background:#ffffff;color:#c62828;border:1px solid #c62828;/);
+  assert.match(html, /🎄 圣诞/);
+  assert.match(html, /圣诞快乐，早点歇。/);
+  assert.match(renderMarkdown(r), /^\*\*🎄 圣诞\*\*　圣诞快乐，早点歇。$/m);
+  assert.doesNotMatch(renderHtml(sampleDaily), /class="festival"/);
+  assert.doesNotMatch(renderMarkdown(sampleDaily), /圣诞|清明|（节日）/);
+  r.layer1.festival = festivalOf('2026-04-05');
+  assert.match(renderHtml(r), /清明/);
+  r.layer1.festival = { ...r.layer1.festival, greeting: '<img onerror="x">' };
+  assert.doesNotMatch(renderHtml(r), /<img/);
 });
 
 test('write daily and weekly standalone HTML previews', async () => {

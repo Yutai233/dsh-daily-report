@@ -127,15 +127,18 @@ try {
     const listState = await page.getByRole('region', { name: '明日待续列表' }).evaluate((el) => {
       const items = [...el.querySelectorAll('li')];
       const before = el.getBoundingClientRect();
-      const third = items[2].getBoundingClientRect();
-      const fourth = items[3].getBoundingClientRect();
-      const result = { exactlyThree: third.bottom <= before.bottom + 1 && fourth.top >= before.bottom - 1, overflow: el.scrollHeight > el.clientHeight };
+      // 卡片只露出一部分待续，数量取决于行高（条目越短露出的越多），所以只断言「露出若干条且必须滚动」。
+      const visible = items.filter((li) => {
+        const r = li.getBoundingClientRect();
+        return r.top >= before.top - 1 && r.bottom <= before.bottom + 1;
+      }).length;
+      const result = { visible, overflow: el.scrollHeight > el.clientHeight };
       el.scrollTop = el.scrollHeight;
       const sixth = items[5].getBoundingClientRect();
       result.sixthReachable = sixth.bottom <= before.bottom + 1 && sixth.top >= before.top - 1;
       return result;
     });
-    if (!listState.exactlyThree || !listState.overflow || !listState.sixthReachable) throw Error(`Three-item carry-over viewport failed: ${JSON.stringify(listState)}`);
+    if (listState.visible < 2 || listState.visible >= 6 || !listState.overflow || !listState.sixthReachable) throw Error(`carry-over viewport failed: ${JSON.stringify(listState)}`);
     await page.getByRole('region', { name: '简报内容' }).evaluate((el) => { el.scrollTop = el.scrollHeight; });
     const after = await page.locator('.ddr-card').evaluate((card) => {
       const scroll = card.querySelector('.ddr-card-scroll');

@@ -180,6 +180,20 @@ test('local-model mode refuses non-loopback hosts and never falls back to cloud'
   assert.equal(url, 'http://127.0.0.1:11434/v1/chat/completions')
 })
 
+test('report: festival 只在节日当天写入 layer1，可在设置里关掉', async () => {
+  const src = { list: async () => [{ id: 's1', createdAt: start, cwd: 'E:\\proj' }], read: async () => events(), titles: async () => ({}) }
+  const f = await collectDay(src, D)
+  await summarizeDay(f, normalizeConfig({}), {})
+  assert.equal(buildDailyReport(f, [], normalizeConfig({})).layer1.festival, null, '普通日不写节日')
+  const xmas = { ...f, date: '2026-12-25' }
+  const r = buildDailyReport(xmas, [], normalizeConfig({}))
+  assert.equal(r.layer1.festival.id, 'xmas')
+  assert.equal(r.layer1.festival.badge, '🎄 圣诞')
+  assert.match(r.layer1.festival.greeting, /^.{1,10}$/u)
+  assert.equal(buildDailyReport(xmas, [], normalizeConfig({ festival: false })).layer1.festival, null, '关掉开关后不出现')
+  assert.equal(buildDailyReport({ ...f, date: '2026-11-13' }, [], normalizeConfig({})).layer1.festival, null)
+})
+
 test('report: only-what-changed sections and 7-day deltas', async () => {
   const src = { list: async () => [{ id: 's1', createdAt: start, cwd: 'E:\\proj' }], read: async () => events(), titles: async () => ({}) }
   const f = await collectDay(src, D)
