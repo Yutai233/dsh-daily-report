@@ -3,7 +3,7 @@
 把本机的 DSH 会话整理成一份能快速读完的简报：今天做了哪些事、用了多少 token、花了多少钱、哪里卡住、明天接着做什么，外加天气、dsh 启停时间和作息提醒。
 
 [![CI](https://github.com/Yutai233/dsh-daily-report/actions/workflows/ci.yml/badge.svg)](https://github.com/Yutai233/dsh-daily-report/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-0.3.0-blue)
+![version](https://img.shields.io/badge/version-0.3.1-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![dsh](https://img.shields.io/badge/dsh-%E2%89%A5%200.2.2--rc.1-4A4AFF)
 ![node](https://img.shields.io/badge/node-%E2%89%A5%2022.15-339933)
@@ -53,27 +53,30 @@
 
 前置条件：DSH Desktop `>= 0.2.2-rc.1`。插件依赖 Host 的 `sessionQuery`、`connection`、`tools`、`systemPrompt` 服务。运行时零第三方依赖，只用 `node:*` 内置模块与全局 `fetch`。
 
-本插件尚未发布到 npm，用下面的方式安装。
+已发布到 npm：[`dsh-daily-report`](https://www.npmjs.com/package/dsh-daily-report)，推荐按包名安装。
 
 ### 方式一：插件管理（推荐）
 
-1. 克隆或下载本仓库，记下仓库根的绝对路径，例如 `E:\path\to\dsh-daily-report`
-2. 打开 DSH 左侧 **插件** 页 → **添加插件**
-3. 包名填入该绝对路径
-4. 安装后点 **立即启用**；未开启 HMR 时重启 DSH
-5. 打开 **设置 → 每日简报**，页面出现且 `%USERPROFILE%\.dsh\dsh-daily-report\` 开始产生数据即表示挂载成功
+1. 打开 DSH 左侧 **插件** 页 → **添加插件**
+2. 包名填 `dsh-daily-report`
+3. 安装后点 **立即启用**；未开启 HMR 时重启 DSH
+4. 打开 **设置 → 每日简报**，页面出现且 `%USERPROFILE%\.dsh\dsh-daily-report\` 开始产生数据即表示挂载成功
 
-### 方式二：开发 link（命令行）
+### 方式二：命令行
 
 ```powershell
-git clone https://github.com/Yutai233/dsh-daily-report.git
 & "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" `
-  plugin --profile desktop add "link:E:/path/to/dsh-daily-report"
+  plugin --profile desktop add dsh-daily-report
 ```
 
-移除时把 `add "link:..."` 换成 `remove dsh-daily-report`。不要手动复制进 `node_modules`，也不要用 `npm install` 安装。
+### 方式三：本地目录（离线或要改代码）
 
-> 仓库根就是插件包根（`package.json` 在根目录），所以 link 路径指向 clone 下来的仓库目录即可，不需要再进子目录。
+1. 克隆或下载本仓库，记下仓库根的绝对路径，例如 `E:\path\to\dsh-daily-report`
+2. **添加插件** 时包名填该绝对路径，或 `add "link:E:/path/to/dsh-daily-report"`
+
+移除时把 `add ...` 换成 `remove dsh-daily-report`。不要手动复制进 `node_modules`。
+
+> 仓库根就是插件包根（`package.json` 在根目录），所以路径指向 clone 下来的仓库目录即可，不需要再进子目录。
 
 ## 使用
 

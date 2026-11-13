@@ -2,7 +2,7 @@
 
 本文件记录 `dsh-daily-report` 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [0.3.1] - 2026-11-13
 
 ### 新增
 
@@ -12,6 +12,7 @@
 
 ### 变更
 
+- README 安装章节改为以 npm 包名为主（添加插件填 `dsh-daily-report`，或 `dsh plugin add dsh-daily-report`），本地目录与 `link:` 降为备选；删掉「本插件尚未发布到 npm」的过时说明。
 - 删除「今日主线」章节与弹窗主线回退；「明日待续」保持置顶，逐会话摘要仍保存在附录。
 - Tokens、估算花费、会话三项关键指标改为紧凑横排，每组标签、数值和涨跌幅同一行；窄屏自然换行。
 - 今日一句话完整保留模型输出，去掉强制 60 字截断。
@@ -64,3 +65,4 @@
 - 真实桌面逐按钮验收仍有缺口，详见 [docs/GUIDE.md](./docs/GUIDE.md) 的「已知边界」。
 
 [0.3.0]: https://github.com/Yutai233/dsh-daily-report/releases/tag/v0.3.0
+[0.3.1]: https://github.com/Yutai233/dsh-daily-report/releases/tag/v0.3.1
