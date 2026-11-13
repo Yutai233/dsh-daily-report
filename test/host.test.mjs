@@ -122,6 +122,9 @@ test('host entry: RPC round trip, generation, dispose', { timeout: 240000 }, asy
   assert.equal(g.value.card.layer1.discovery, null, 'local-only never invents discoveries')
   assert.deepEqual(g.value.card.carryOver, expectedCarryOver, 'generated card contains all six pending items')
   assert.equal(Object.hasOwn(g.value.card, 'mainline'), false, 'card omits the removed mainline section')
+  assert.equal(g.value.card.gen, null, 'local-only generation spends no model tokens, so there is nothing to report')
+  assert.equal(g.value.card.layer1.usage.cost, g.value.card.usage.rows[1].value, 'structured usage mirrors the report usage rows')
+  assert.equal(g.value.card.layer1.usage.tokens, g.value.card.usage.rows[0].value)
 
   const w = await rpc(routes, 'generate', { kind: 'weekly', date: '2026-11-12' })
   assert.equal(w.ok, true, JSON.stringify(w.error))
@@ -133,6 +136,7 @@ test('host entry: RPC round trip, generation, dispose', { timeout: 240000 }, asy
   assert.deepEqual(g.value.card.carryOver, r.value.report.sections.carryOver, 'generated card matches full report')
   assert.deepEqual(r.value.card.carryOver, r.value.report.sections.carryOver, 'saved-report card matches full report')
   assert.equal(Object.hasOwn(r.value.card, 'mainline'), false)
+  assert.deepEqual(r.value.report.meta, { gen: { calls: 0, tokens: 0, inputTokens: 0, outputTokens: 0, costCny: 0, estimated: false } }, 'generation meta survives the JSON round trip')
   const bad = await rpc(routes, 'report', { kind: 'daily', key: '../../x' })
   assert.equal(bad.ok, false)
 

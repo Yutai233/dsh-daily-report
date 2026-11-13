@@ -42,6 +42,8 @@ plugin/
 
 自动卡片 payload 新增 `requestedDate`（设置目标日）、`fallbackNote: string|null`；目标日无活动时在保留期内回退最近活动日，不回退到目标日之后。显式指定 `date` 不回退。解析过程不调用模型。
 
+自动卡片 payload 新增 `gen: { calls, tokens, cny, estimated } | null`（来自报告 `meta.gen`，见 §4）：卡片左下角据此显示「生成 12.3 万 tokens（¥0.12）」，`estimated` 为真时改显示「生成约」。旧报告没有该字段，卡片只是不显示这段。
+
 `layer1.weather` 新增 `date`、`label`（如“天气 11-12”），天气来自**生成报告时的当前日期**，不是重新查看归档时自动更新。
 
 ## 1. `lib/util.js`（由 lead 提供，其他模块可直接 import）
@@ -106,11 +108,11 @@ export function escapeHtml(s)
   "usageEvents": [ { "t": 1794452445972, "costCny": 0.012, "tokens": 30948, "sessionId": "…", "turn": 1 } ],
   "activity": { "firstActive": 0, "lastActive": 0, "hourly": [/*24 个整数：每小时真人消息+助手消息数*/], "userMessageTimes": [/*ms*/] },
   "rework": { "count": 1, "userMessages": 9, "ratio": 0.11 },
-  "carryOver": [{ "text": "补 Windows 通知分支", "sessionId": "…", "title": "…", "kind": "todo"|"interrupted" }],
+  "carryOver": [{ "text": "补 Windows 通知分支", "sessionId": "…", "title": "…", "kind": "todo"|"interrupted" }],   // 已按来源会话活跃度排序：当日 token 总数降序，其次工具调用、最近活跃
 
   // —— 以下字段由其它采集器写入，可能为 null ——
   "host": { "boots": [{ "bootId": "…", "start": 0, "end": 0, "endKind": "beat"|"running" }], "firstStart": 0, "onlineMs": 0 },
-  "weather": { "location": "上海", "date": "2026-11-12", "code": 61, "text": "小雨", "icon": "rain", "tMin": 9, "tMax": 14, "precipProb": 80, "precipMm": 3.2, "deltaMax": -6, "aqi": 85, "tips": ["有雨，记得带伞", "比昨天降温 6°C"] },
+  "weather": { "location": "上海", "date": "2026-11-12", "code": 61, "text": "小雨", "icon": "rain", "tMin": 9, "tMax": 14, "precipProb": 80, "precipMm": 3.2, "deltaMax": -6, "aqi": 85, "tips": ["记得带伞", "比昨天降温 6°C"] },
   "idle": { "samples": 420, "activeMs": 0, "longestStreak": { "start": 0, "end": 0, "ms": 0 }, "streaks": [{ "start": 0, "end": 0, "ms": 0 }], "sedentaryCount": 3, "firstActive": 0, "lastActive": 0 }
 }
 ```
@@ -139,7 +141,7 @@ export async function fetchWeather({ latitude, longitude, location, dateStr, fet
   // https://api.open-meteo.com/v1/forecast?latitude=…&longitude=…&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum&timezone=auto&past_days=1&forecast_days=2
   // 空气：https://air-quality-api.open-meteo.com/v1/air-quality?latitude=…&longitude=…&current=us_aqi （失败忽略，aqi=null）
   // deltaMax = 当天最高温 − 前一天最高温
-  // tips 只在“需要注意”时给：降水概率≥50 或 code 属于雨雪雷 → "有雨/雪，记得带伞"；deltaMax ≤ −5 → "比昨天降温 N°C，注意添衣"；aqi>100 → "空气较差（AQI N），少开窗"；tMax≥35 → 高温；tMin≤0 → 结冰。
+  // tips 只在“需要注意”时给，文案尽量短：code 属于雨雪雷 → "记得带伞" / "注意防滑保暖" / "有雷阵雨"；降水概率≥50 → "降水概率 N%，记得带伞"；deltaMax ≤ −5 → "比昨天降温 N°C"；aqi>100 → "空气较差（AQI N）"；tMax≥35 → "最高 N°C，防暑补水"；tMin≤0 → "最低 N°C，注意保暖"。
 export function weatherText(code) → { text: '小雨', icon: 'rain'|'sun'|'cloud'|'fog'|'snow'|'storm'|'drizzle' }   // WMO code 中文映射
 ```
 任何网络失败返回 null，不抛错。
@@ -189,10 +191,23 @@ export function analyzeHealth(facts, { enabled, sitLimitMin = 50, lateHour = 23,
   "label": "11月12日 周三" | "2026 第46周（11/09–11/15）" | "2026年11月",
   "range": { "start": "2026-11-12", "end": "2026-11-12" },
   "generatedAt": 0, "language": "zh",
+  "meta": {                               // 生成过程的元数据；旧报告没有
+    "gen": {                              // 生成本报告消耗的用量（engine.generationMeta）
+      "calls": 4, "tokens": 123000, "inputTokens": 98000, "outputTokens": 25000,
+      "costCny": 0.1234,                  // 按设置里的价目表估算，非账单
+      "estimated": false                  // 模型没回报 usage 时按字符数估算，卡片显示「生成约」
+    }
+  },
   "layer1": {
     "weather": { "text": "☁ 14°C 小雨", "tip": "建议带伞" } | null,
     "host": "dsh 08:52 启动，在线 6h20m" | null,
     "headline": "3 个会话 · 105 次工具 · 84 万 tokens（约 ¥1.20）",
+    "usage": {                            // headline 的结构化形式，供卡片分行摆放；无活动时为 null
+      "sessions": 3, "toolCalls": 105,
+      "tokens": "84 万", "cost": "¥1.20",
+      "trend": "up"|"down"|"flat"|null,   // 与昨天比，口径同 sections.usage.rows[0]
+      "delta": "+23%"
+    } | null,
     "oneLiner": "完成插件调研，开始设计日报功能方案。",
     "discovery": null,                    // string|null；模型判断确实值得展示才填写
     "alerts": ["连续用机 2h10m 未休息", "23:40 后仍在工作"],
@@ -236,11 +251,11 @@ export function renderMarkdown(report) → string
 - “只写有变化的内容”：section 为 null 就不渲染该段；`layer1.alerts` 为空就不渲染警示行。
 - Markdown：全量，同样的层次；第 2 层用 `## `，附录用 `## 附录`；表格用 GFM。
 
-## 6. 断点续工与每日意外发现
+## 6. 断点续工与每日发现
 
 - 日报、周报、月报的 `sections.carryOver[]` 保留采集器给出的 `sessionId`；老报告没有 ID 时不伪造目的地。卡片与 DSH 内完整报告在正文后显示「相关会话」按钮，通过 `uiWorkspace.openSession(sessionId)` 原生导航；失败留在原界面并显示错误。
-- `summarizeDay()` 返回 `{ oneLiner, discovery, mode, llmCalls }`。现有 DAY 请求合并生成 JSON `{ "oneLiner": "…", "discovery": null|string }`，不增加模型请求次数；有具体依据且有新意才写发现，禁止为了填空重复摘要、待办、成本或健康提醒。发现清理后最多 180 字。
+- `summarizeDay()` 返回 `{ oneLiner, discovery, mode, llmCalls }`。现有 DAY 请求合并生成 JSON `{ "oneLiner": "…", "discovery": null|string }`，不增加模型请求次数；有具体依据且有新意才写发现，禁止为了填空重复摘要、待办、成本或健康提醒。发现清理后最多 60 字。
 - `facts.discovery` 与 `report.layer1.discovery` 为 `string|null`，旧字段缺失视为 null。仅统计、无可用模型、模型失败、格式错误或没有值得展示的内容时不生成模板发现。周期回填不调用模型生成发现。
-- 卡片与 HTML 在总览下、明日待续上方按需显示发现；Markdown 同步归档。空值时标题与容器一并省略。
+- 卡片、HTML 与 Markdown 在总览下、明日待续上方按需显示发现，标签与正文合并为一行（`每日发现：正文`）；空值时整块省略。
 - `renderHtml(report, { redact = false, sessionLinks = false })` 仍输出无脚本的单文件。仅 DSH 的 generate/report RPC 以 `sessionLinks:true` 输出按钮，并向客户端提供结构化来源白名单。导出的 HTML 不显示无效按钮，Markdown 留存会话 ID。
 - 无可跳转会话的查看器继续使用 `sandbox=""`。交互报告只授权 `allow-scripts`（不允许 same-origin、弹窗、表单或顶层导航），CSP 仅允许随机 nonce 的可信点击桥；原报告脚本、内联事件及网络资源保持禁止。父页只接受当前 iframe、当前报告、匹配 token 且在结构化会话白名单内的消息；桥只处理真实用户点击/键盘激活。

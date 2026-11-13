@@ -118,12 +118,12 @@ test('discovery follows the overview only when present; session controls are DSH
   assert.match(html, /source-1&quot; onclick=&quot;bad\(\)/);
   assert.doesNotMatch(renderHtml(r), /<button/);
   assert.doesNotMatch(renderHtml(r, { sessionLinks: true, redact: true }), /<button/);
-  assert.match(renderMarkdown(r), /## 每日意外发现/);
+  assert.match(renderMarkdown(r), /^\*\*每日发现：\*\*发现 &lt;script&gt;重复手工校验&lt;\/script&gt; 可以合并$/m);
   assert.match(renderMarkdown(r), /会话 ID：source-1/);
   for (const discovery of [null, undefined, '', '  ']) {
     r.layer1.discovery = discovery;
     assert.doesNotMatch(renderHtml(r), /<aside class="discovery"/);
-    assert.doesNotMatch(renderMarkdown(r), /## 每日意外发现/);
+    assert.doesNotMatch(renderMarkdown(r), /\*\*每日发现：\*\*/);
   }
 });
 

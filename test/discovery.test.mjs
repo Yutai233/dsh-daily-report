@@ -92,7 +92,7 @@ test('discovery is bounded, while the user-preserved legacy oneLiner length rema
   const longDiscovery = '两个项目共享同一套字体检查流程。'.repeat(30)
   const { result } = await summarize(JSON.stringify({ oneLiner: longOneLiner, discovery: longDiscovery }))
   assert.equal(result.oneLiner, longOneLiner)
-  assert.ok(result.discovery.length <= 180)
+  assert.ok(result.discovery.length <= 60)
   assert.ok(result.discovery.endsWith('…'))
 })
 

@@ -108,6 +108,61 @@ test('morning card labels fallback and weather date separately from report date'
   assert.match(text(tree), /11月10日/);
 });
 
+test('morning card merges weather into the date row and drops the duplicated weather date', () => {
+  global.document = { body: {} };
+  const { api, render } = harness();
+  const weather = { date: '2026-11-13', label: '天气 11-13', text: '天气 11-13 · ☁ 12~18°C 阵雨 · 南京', tip: '记得带伞' };
+  const card = { key: '2026-11-13', label: '11月13日 周五', layer1: { headline: '9 个会话 · 580 次工具 · 6822 万 tokens', host: 'dsh 12:45 启动，在线 8h51m（启动 4 次）', weather } };
+  const tree = render(api.MorningCard, { store: mockStore({ config: {}, card }), anchorRef: { current: null }, onClose() {} });
+  const title = text(nodes(tree).find((n) => n.props.className === 'ddr-title'));
+  assert.match(title, /11月13日 周五/);
+  assert.match(title, /☁ 12~18°C 阵雨 · 南京/);
+  assert.match(title, /记得带伞/);
+  assert.doesNotMatch(title, /天气 11-13/);
+  assert.ok(!nodes(tree).some((n) => n.props.className === 'ddr-line' && text(n).includes('阵雨')), 'weather must not keep its own body line');
+  assert.doesNotMatch(text(tree), /dsh 12:45 启动/, 'card drops the dsh uptime line');
+  // 天气日期与报告日期不是同一天时，保留天气日期，避免丢掉"这份天气属于哪天"。
+  card.layer1 = { headline: '合成数据', weather: { date: '2026-11-12', label: '天气 11-12', text: '晴' } };
+  const other = text(nodes(render(api.MorningCard, { store: mockStore({ config: {}, card }), anchorRef: { current: null }, onClose() {} })).find((n) => n.props.className === 'ddr-title'));
+  assert.match(other, /11月13日 周五/);
+  assert.match(other, /天气 11-12 ·\s*晴/);
+});
+
+test('morning card puts tokens beside the alert pill and shows the report generation cost', () => {
+  global.document = { body: {} };
+  const { api, render } = harness();
+  const state = (gen, usage) => ({
+    config: {},
+    card: {
+      key: '2026-11-13', label: '11月13日 周五', gen,
+      layer1: { headline: '9 个会话 · 580 次工具 · 6822 万 tokens（约 ¥19.58）', usage, alerts: ['连续用机 1h07m 未休息'], oneLiner: '一句话' },
+      usage: { rows: [{ label: 'Tokens', value: '6822 万', delta: '+5%', trend: 'up' }], spark: [1, 2, 3] },
+    },
+  });
+  const usage = { sessions: 9, toolCalls: 580, tokens: '6822 万', cost: '¥19.58', trend: 'up', delta: '+12%' };
+  const tree = render(api.MorningCard, { store: mockStore(state({ calls: 11, tokens: '12.3 万', cny: '¥0.12', estimated: false }, usage)), anchorRef: { current: null }, onClose() {} });
+  const row = nodes(tree).find((n) => n.props.className === 'ddr-alerts');
+  assert.ok(row, 'usage shares the alert row');
+  assert.match(text(row), /连续用机 1h07m 未休息/);
+  assert.match(text(row), /6822 万 tokens/);
+  assert.match(text(row), /▲ \+12%/);
+  assert.match(text(row), /（约 ¥19\.58）/);
+  assert.doesNotMatch(text(tree), /9 个会话/, 'card keeps only tokens and cost of the usage line');
+  assert.doesNotMatch(text(tree), /580 次工具/);
+  assert.match(text(tree), /生成 12\.3 万 tokens（¥0\.12）/);
+  assert.ok(!nodes(tree).some((n) => n.props.className === 'ddr-spark'), 'the usage figure no longer carries the spark bars');
+
+  // Provider reported no usage → the estimate is labelled.
+  const estimated = render(api.MorningCard, { store: mockStore(state({ calls: 3, tokens: '4.1 万', cny: '<¥0.01', estimated: true }, usage)), anchorRef: { current: null }, onClose() {} });
+  assert.match(text(estimated), /生成约 4\.1 万 tokens（<¥0\.01）/);
+
+  // Reports written before 0.3.4 have no structured usage/gen: rows fallback, no trend marker.
+  const legacy = nodes(render(api.MorningCard, { store: mockStore(state(null, null)), anchorRef: { current: null }, onClose() {} })).find((n) => n.props.className === 'ddr-alerts');
+  assert.match(text(legacy), /6822 万 tokens/);
+  assert.doesNotMatch(text(legacy), /▲|▼/);
+  assert.doesNotMatch(text(legacy), /生成/);
+});
+
 test('morning card retains all six carry-over items and has a keyboard scroll region', () => {
   global.document = { body: {} };
   const { api, render } = harness();
@@ -199,13 +254,16 @@ test('morning card adds inline session buttons only for known sources and condit
   const button = nodes(tree).filter(n => n.props.className === 'ddr-session-link');
   assert.equal(button.length, 1); assert.equal(button[0].props.title, '打开会话：报告改版');
   await button[0].props.onClick(); assert.deepEqual(opened, ['source-1']);
-  assert.match(text(tree), /每日意外发现/);
-  assert.ok(text(tree).indexOf(card.layer1.oneLiner) < text(tree).indexOf('每日意外发现'));
-  assert.ok(text(tree).indexOf('每日意外发现') < text(tree).indexOf('明日待续'));
+  assert.match(text(tree), /每日发现：/);
+  assert.ok(text(tree).indexOf(card.layer1.oneLiner) < text(tree).indexOf('每日发现'));
+  assert.ok(text(tree).indexOf('每日发现') < text(tree).indexOf('明日待续'));
+  const discoveryNode = nodes(tree).filter(n => n.props.className === 'ddr-discovery')[0];
+  assert.equal(discoveryNode.children[0].children[0], '每日发现：');
+  assert.equal(discoveryNode.children[1], card.layer1.discovery);
   for (const value of [null, undefined, '', '   ']) {
     card.layer1.discovery = value;
     tree = render(api.MorningCard, { store, anchorRef: {}, onClose() {} });
-    assert.doesNotMatch(text(tree), /每日意外发现/);
+    assert.doesNotMatch(text(tree), /每日发现/);
   }
 });
 

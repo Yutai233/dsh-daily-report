@@ -204,7 +204,7 @@ console.log('[4] weather: fetchWeather / geocode（注入假 fetch）')
   assertEq(w.aqi, 138, 'aqi')
   assertEq(w.location, '上海', 'location')
   assertEq(w.date, dateStr, 'date')
-  assertEq(w.tips, ['有雨，记得带伞', '比昨天降温 7°C，注意添衣', '空气较差（AQI 138），少开窗'], 'tips')
+  assertEq(w.tips, ['记得带伞', '比昨天降温 7°C', '空气较差（AQI 138）'], 'tips')
 
   // 空气接口失败：aqi=null，天气仍然可用
   const airFail = async (url) => {

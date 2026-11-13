@@ -244,13 +244,6 @@ function HeroFishSvg({ size, className, hovering }) {
     }) : null));
 }
 
-function Spark({ data }) {
-  if (!data || !data.length) return null;
-  const max = Math.max(1, ...data.map((d) => d.value || 0));
-  return h('span', { className: 'ddr-spark', 'aria-hidden': true },
-    data.slice(-7).map((d, i) => h('i', { key: i, style: { height: Math.max(2, Math.round((d.value || 0) / max * 22)) + 'px' }, title: d.date })));
-}
-
 const MorningCardBoundary = React.Component ? class extends React.Component {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
@@ -277,10 +270,10 @@ function MorningCard({ store, anchorRef, onClose }) {
     };
     const carry = carryRef.current;
     const items = carry?.querySelectorAll('li');
-    if (items?.length > 3) {
-      // offset geometry stays in layout pixels while ddr-pop scales the card.
-      const height = items[2].offsetTop + items[2].offsetHeight - items[0].offsetTop;
-      setStyle(carry, 'max-height', Math.max(1, height) + 'px');
+    // 卡片只露出前两条待续，其余滚动查看；offset geometry stays in layout pixels while ddr-pop scales the card.
+    if (items?.length > 2) {
+      const height = items[1].offsetTop + items[1].offsetHeight - items[0].offsetTop;
+      if (height > 0) setStyle(carry, 'max-height', height + 'px');
     } else if (carry?.style.maxHeight) carry.style.removeProperty('max-height');
     const r = a.getBoundingClientRect();
     const insetTop = Math.max(16, (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dsh-frame-overlay-top')) || 0) + 12);
@@ -338,6 +331,29 @@ function MorningCard({ store, anchorRef, onClose }) {
   const st = snap.state;
   const card = st && st.card;
   const l1 = card && card.layer1;
+  // 天气并入日期行：weather.text 自带「天气 MM-DD · 」前缀，而日期已由 card.label 给出，这里剥掉前缀；
+  // 只有天气日期与报告日期不是同一天（回退展示）时才补回天气日期，否则会丢掉"这份天气属于哪天"。
+  const wx = (card && l1 && l1.weather) || null;
+  const wxBody = wx ? String(wx.text || '').replace(/^天气\s*\d{2}-\d{2}\s*·\s*/, '').trim() : '';
+  const wxDate = wx && wx.date && card && wx.date !== card.key ? (wx.label || '天气 ' + String(wx.date).slice(5)) : '';
+  const wxInline = wx && (wxBody || wx.tip)
+    ? h('span', { className: 'ddr-wx' }, ' · ', wxDate ? wxDate + ' · ' : null, wxBody || null, wx.tip ? h('span', { className: 'ddr-tip' }, ' · ' + wx.tip) : null)
+    : null;
+  // 用量只保留 tokens 与花费，放到告警胶囊右侧；涨跌幅用完整报告同款的 ▲/▼ 标记。
+  // layer1.usage 是新报告的结构化字段，旧报告退回 sections.usage.rows（无差值，避免语义错位）。
+  const l1Usage = (l1 && l1.usage) || null;
+  const usageRows = (card && card.usage && card.usage.rows) || null;
+  const tokText = l1Usage ? l1Usage.tokens : usageRows && usageRows[0] ? usageRows[0].value : '';
+  const costText = l1Usage ? l1Usage.cost : usageRows && usageRows[1] ? usageRows[1].value : '';
+  const tokTrend = l1Usage ? l1Usage.trend : null;
+  const tokDelta = l1Usage ? l1Usage.delta : null;
+  const usageNode = tokText
+    ? h('span', { className: 'ddr-usage', title: '这一天用掉的 token 与估算花费' },
+      h('b', null, tokText + ' tokens'),
+      tokTrend && tokDelta ? h('span', { className: 'ddr-delta ' + tokTrend, title: '与前一天相比' }, (tokTrend === 'up' ? '▲' : tokTrend === 'down' ? '▼' : '—') + ' ' + tokDelta) : null,
+      costText ? h('span', { className: 'ddr-usage-cost' }, '（约 ' + costText + '）') : null)
+    : null;
+  const alertItems = (l1 && l1.alerts) || [];
   let body;
   if (!st) {
     body = h('p', { className: 'ddr-empty' }, snap.refreshError ? '暂时无法连接简报服务：' + snap.refreshError : '加载中…');
@@ -349,18 +365,18 @@ function MorningCard({ store, anchorRef, onClose }) {
   } else {
     body = h(React.Fragment, null,
       card.fallbackNote ? h('p', { className: 'ddr-note ddr-fallback', role: 'status' }, card.fallbackNote) : null,
-      l1.weather ? h('div', { className: 'ddr-line' }, h('span', { className: 'ddr-weather-date' }, l1.weather.label || (l1.weather.date ? '天气 ' + l1.weather.date : '天气（生成时获取）')), h('b', null, l1.weather.text.replace(/^天气 \d{2}-\d{2}\s*·\s*/, '')), l1.weather.tip ? h('span', { className: 'ddr-tip' }, '· ' + l1.weather.tip) : null) : null,
-      l1.host ? h('div', { className: 'ddr-line' }, l1.host) : null,
-      h('div', { className: 'ddr-line' }, h('span', null, l1.headline), card.usage ? h(Spark, { data: card.usage.spark }) : null),
       l1.oneLiner ? h('p', { className: 'ddr-one' }, l1.oneLiner) : null,
-      l1.alerts && l1.alerts.length ? h('div', { className: 'ddr-alerts' }, l1.alerts.map((a, i) => h('span', { key: i, className: 'ddr-alert' }, '⚠ ' + a))) : null,
-      typeof l1.discovery === 'string' && l1.discovery.trim() ? h('aside', { className: 'ddr-discovery', 'aria-label': '每日意外发现' }, h('h4', null, '每日意外发现'), h('p', null, l1.discovery)) : null,
+      alertItems.length || usageNode ? h('div', { className: 'ddr-alerts' },
+        alertItems.map((a, i) => h('span', { key: i, className: 'ddr-alert' }, '⚠ ' + a)),
+        usageNode) : null,
+      typeof l1.discovery === 'string' && l1.discovery.trim() ? h('aside', { className: 'ddr-discovery', 'aria-label': '每日发现' }, h('b', null, '每日发现：'), l1.discovery) : null,
       card.carryOver && card.carryOver.length ? h('div', { className: 'ddr-carry' },
         h('h4', null, '明日待续 · ' + card.carryOver.length),
         h('div', { ref: carryRef, className: 'ddr-carry-scroll', tabIndex: 0, role: 'region', 'aria-label': '明日待续列表' },
           h('ul', { className: 'ddr-list' }, card.carryOver.map((c, i) => h('li', { key: i }, h('span', null, c.kind === 'todo' ? '待办' : '中断'), h('span', null, c.text, typeof c.sessionId === 'string' && c.sessionId.trim() ? h('button', { type: 'button', className: 'ddr-session-link', title: c.title ? '打开会话：' + c.title : '打开来源会话', onClick: () => store.openSession(c.sessionId) }, '相关会话') : null, c.title ? h('small', { className: 'ddr-carry-source' }, c.title) : null)))))) : null,
       h('div', { className: 'ddr-actions' },
-        h('span', { className: 'ddr-meta' }, PRIVACY_LABEL[st.config.privacy] || ''),
+        h('span', { className: 'ddr-meta' }, PRIVACY_LABEL[st.config.privacy] || '',
+          card.gen ? h('span', { className: 'ddr-gen', title: '生成本次简报消耗的 token 与费用' }, ' · ' + (card.gen.estimated ? '生成约 ' : '生成 ') + card.gen.tokens + ' tokens（' + card.gen.cny + '）') : null),
         h('button', { type: 'button', className: 'ddr-btn', disabled: !!snap.busy, title: '重新生成', onClick: () => store.generate('daily', { date: card.key }).catch(() => {}) }, snap.busy ? '生成中…' : '刷新'),
         h('button', { type: 'button', className: 'ddr-btn primary', onClick: (e) => store.view('daily', card.key, 'DSH 每日简报 · ' + card.label, e.currentTarget) }, '查看完整报告')));
   }
@@ -369,7 +385,7 @@ function MorningCard({ store, anchorRef, onClose }) {
     style: { left: -9999, top: -9999 },
   },
   h('header', { className: 'ddr-head' },
-    h('div', { className: 'ddr-title' }, '每日简报', card ? h('small', null, card.label) : null),
+    h('div', { className: 'ddr-title' }, '每日简报', card ? h('small', { className: 'ddr-title-meta' }, card.label, wxInline) : null),
     h('button', { type: 'button', className: 'ddr-x', 'aria-label': '今天不再弹出', title: '今天不再弹出', onClick: () => onClose(true) }, h(IconClose))),
   h('div', { className: 'ddr-card-scroll', tabIndex: 0, role: 'region', 'aria-label': '简报内容' },
     body,
@@ -607,6 +623,8 @@ function SettingsSection({ store }) {
           : '仅支持 Windows。当前系统下健康提醒只用 DSH 消息时间粗略估计。',
       }, h(Switch, { checked: cfg.inputSampling, disabled: !win, label: '键鼠空闲采样', onChange: (v) => patch({ inputSampling: v }) })),
       h(Row, { title: '健康提醒', desc: '久坐、熬夜、午休没离开、周末加班。' }, h(Switch, { checked: cfg.health.enabled, label: '健康提醒', onChange: (v) => patch({ health: { ...cfg.health, enabled: v } }) })),
+      cfg.health.enabled ? h(Row, { title: '久坐实时提醒', desc: '在 DSH 里连续聊天超过阈值时，直接弹系统通知提醒你起来，不用等到第二天。只按你的消息时间估算：15 分钟没有消息就算离开，从 0 重新计时。' },
+        h(Switch, { checked: cfg.health.liveReminder, label: '久坐实时提醒', onChange: (v) => patch({ health: { ...cfg.health, liveReminder: v } }) })) : null,
       cfg.health.enabled ? h(Row, { title: '提醒阈值', desc: '连续用机超过多少分钟算久坐；几点以后算熬夜。' },
         h(NumberInput, { label: '久坐提醒分钟数', value: cfg.health.sitLimitMin, min: 20, max: 180, onCommit: (v) => patch({ health: { ...cfg.health, sitLimitMin: v } }) }), h('span', { className: 'ddr-note' }, '分钟'),
         h(NumberInput, { label: '熬夜提醒时刻', value: cfg.health.lateHour, min: 20, max: 26, onCommit: (v) => patch({ health: { ...cfg.health, lateHour: v } }), width: 64 }), h('span', { className: 'ddr-note' }, '点后')) : null),

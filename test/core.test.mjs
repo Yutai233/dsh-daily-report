@@ -7,7 +7,7 @@ import path from 'node:path'
 const dir = mkdtempSync(path.join(tmpdir(), 'ddr-core-'))
 process.env.DSH_DAILY_REPORT_DIR = dir
 const { foldSession, collectDay, commandFamily } = await import('../lib/collect/sessions.js')
-const { summarizeDay, createCompleter, templateSummary } = await import('../lib/summarize.js')
+const { summarizeDay, createCompleter, createMeter, templateSummary } = await import('../lib/summarize.js')
 const { buildDailyReport, delta } = await import('../lib/analyze/report.js')
 const { normalizeConfig, DEFAULTS } = await import('../lib/config.js')
 const { dayRange, isoWeek } = await import('../lib/util.js')
@@ -71,6 +71,20 @@ test('foldSession extracts the design-doc facts', () => {
   assert.equal(r.acc.outputTokens, 200)
 })
 
+test('carry-over is ordered by how busy the source session was', async () => {
+  const big = events().map((e) => (e.type === 'assistant/message' && e.data && e.data.usage
+    ? { ...e, data: { ...e.data, usage: { inputTokens: 90000, outputTokens: 9000, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 99000 } } }
+    : e))
+  const src = {
+    list: async () => [{ id: 'quiet', createdAt: start, cwd: 'E:\\a' }, { id: 'busy', createdAt: start, cwd: 'E:\\b' }],
+    read: async (id) => (id === 'busy' ? big : events()),
+    titles: async () => ({ quiet: '小会话', busy: '大会话' }),
+  }
+  const f = await collectDay(src, D)
+  assert.deepEqual(f.carryOver.map((c) => c.sessionId), ['busy', 'quiet'], 'busiest session first, even though it was listed second')
+  assert.equal(f.carryOver[0].text, '补测试')
+})
+
 test('collectDay aggregates and builds fact packs', async () => {
   const src = {
     list: async () => [{ id: 's1', createdAt: start, cwd: 'E:\\proj' }, { id: 'sub', createdAt: start, cwd: 'E:\\proj', origin: 'subagent' }],
@@ -120,6 +134,42 @@ test('summaries: local-only never calls a model; cloud uses llm.stream and cache
   assert.equal(calls, 1, 'only the day one-liner is recomputed')
 })
 
+test('summaries: reported usage is metered, missing usage falls back to an estimate', async () => {
+  const src = { list: async () => [{ id: 's1', createdAt: start, cwd: 'E:\\proj' }], read: async () => events(), titles: async () => ({ s1: '修 bug' }) }
+  const cfgA = normalizeConfig({ privacy: 'cloud', cloudRoute: { provider: 'p', model: 'm' } })
+  const metered = { async *stream(opts) { assert.equal(opts.provider, 'p'); yield { type: 'text-delta', text: '修复了 index.js 的空指针；测试仍有 1 个失败。' }; yield { type: 'usage', usage: { inputTokens: 1200, outputTokens: 80, cacheReadTokens: 300 } } } }
+  const meter = createMeter()
+  const complete = createCompleter(cfgA, { llm: metered, meter })
+  await complete('系统', '提示', 10)
+  await complete('系统', '提示', 10)
+  assert.equal(meter.reported, true)
+  assert.deepEqual([meter.inputTokens, meter.outputTokens, meter.cacheReadTokens], [2400, 160, 600])
+
+  const f = await collectDay(src, D)
+  const a = await summarizeDay(f, cfgA, { llm: metered })
+  assert.equal(a.genUsage.calls, a.llmCalls)
+  assert.equal(a.genUsage.inputTokens, 1200 * a.genUsage.calls)
+  assert.equal(a.genUsage.estimated, false)
+
+  // A provider that never sends a usage chunk: estimate from the text we sent and got back.
+  const quiet = { async *stream() { yield { type: 'text-delta', text: '模板式摘要，没有用量信息。' } } }
+  const f2 = await collectDay(src, D)
+  const b = await summarizeDay(f2, cfgA, { llm: quiet })
+  assert.equal(b.genUsage.estimated, true)
+  assert.ok(b.genUsage.inputTokens > 0 && b.genUsage.outputTokens > 0)
+  assert.equal(b.genUsage.calls, b.llmCalls)
+})
+
+test('generationMeta turns genUsage into tokens plus a priced cost', async () => {
+  const { generationMeta } = await import('../lib/engine.js')
+  const meta = generationMeta({ calls: 2, inputTokens: 1000, outputTokens: 500 }, {})
+  assert.equal(meta.calls, 2)
+  assert.equal(meta.tokens, 1500)
+  assert.equal(meta.estimated, false)
+  assert.ok(meta.costCny > 0 && meta.costCny <= 0.0035, '峰时 2/3 元每百万：' + meta.costCny)
+  assert.deepEqual(generationMeta(null, {}), { calls: 0, tokens: 0, inputTokens: 0, outputTokens: 0, costCny: 0, estimated: false })
+})
+
 test('local-model mode refuses non-loopback hosts and never falls back to cloud', async () => {
   const c1 = createCompleter(normalizeConfig({ privacy: 'local-model', localModel: { baseUrl: 'https://api.example.com/v1', model: 'x' } }), {})
   assert.equal(c1, null)
@@ -139,6 +189,8 @@ test('report: only-what-changed sections and 7-day deltas', async () => {
   assert.equal(r.sections.mainline, null)
   assert.equal(r.sections.usage.rows[0].delta, '+100%')
   assert.equal(r.sections.usage.rows[0].trend, 'up')
+  // layer1.usage feeds the compact morning-card line: tokens+cost plus the day-over-day marker.
+  assert.deepEqual(r.layer1.usage, { sessions: f.totals.sessions, toolCalls: f.totals.toolCalls, tokens: r.sections.usage.rows[0].value, cost: r.sections.usage.rows[1].value, trend: 'up', delta: '+100%' })
   assert.ok(r.sections.blockers.items.some((x) => x.includes('LLM 重试')))
   assert.equal(r.sections.carryOver[0].text, '补测试')
   const quiet = { ...f, sessions: [], tools: { ...f.tools, top: [], failures: [], hotFiles: [] }, totals: { ...f.totals, sessions: 0, retries: 0, turnEnds: {} }, carryOver: [], rework: { count: 0, ratio: 0 } }
@@ -146,6 +198,7 @@ test('report: only-what-changed sections and 7-day deltas', async () => {
   assert.equal(rq.sections.blockers, null)
   assert.equal(rq.sections.carryOver, null)
   assert.equal(rq.sections.usage, null)
+  assert.equal(rq.layer1.usage, null)
   assert.equal(delta(5, 0), null)
 })
 

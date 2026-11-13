@@ -177,7 +177,8 @@ try {
   const malicious = '<script>window.__reportScriptRan=true;parent.postMessage({type:"evil"},"*")</script><button data-ddr-session="rogue-session">伪造来源</button><button onclick="window.__handlerRan=true">恶意事件</button>';
   await page.evaluate((html) => window.mountViewer(html, ['allowed-session']), renderHtml(interactiveReport, { sessionLinks: true }) + malicious);
   const interactiveFrame = page.frameLocator('.ddr-viewer iframe');
-  await interactiveFrame.getByRole('heading', { name: '每日意外发现', exact: true }).waitFor();
+  await interactiveFrame.locator('.discovery').waitFor();
+  if (await interactiveFrame.locator('.discovery').textContent() !== '每日发现：反复手工验证的布局可以沉淀为回归脚本。') throw Error('Discovery was not rendered as one inline line');
   if (await page.locator('.ddr-viewer iframe').getAttribute('sandbox') !== 'allow-scripts') throw Error('Interactive frame permissions are not minimal');
   await page.evaluate(() => window.postMessage({ type: 'ddr-open-session', token: 'fake', sessionId: 'allowed-session' }, '*'));
   await interactiveFrame.getByRole('button', { name: '伪造来源' }).click();

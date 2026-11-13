@@ -17,29 +17,35 @@
 .ddr-card[data-placement=below]::after{bottom:auto;top:-5px;transform:rotate(225deg)}
 @keyframes ddr-pop{from{opacity:0;transform:translateY(6px) scale(.97)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){.ddr-card{animation:none}}
-.ddr-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.ddr-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:0;padding-bottom:6px;border-bottom:.5px solid var(--dsw-alias-border-l2)}
 .ddr-title{font-size:14px;font-weight:600;line-height:22px;display:flex;align-items:center;gap:6px;min-width:0}
-.ddr-title small{font-weight:400;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.ddr-title small{font-weight:400;color:var(--dsw-alias-label-tertiary);font-size:12px;min-width:0}
+.ddr-title .ddr-wx{color:var(--dsw-alias-label-secondary)}
 .ddr-x{width:24px;height:24px;border-radius:var(--dsw-radius-sm);border:0;background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:none}
 @media (hover:hover){.ddr-x:hover{background:var(--dsw-alias-interactive-bg-hover)}}
-.ddr-line{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;margin:2px 0;display:flex;gap:6px;align-items:baseline}
-.ddr-line b{font-weight:500;color:var(--dsw-alias-label-primary)}
 .ddr-tip{color:var(--dsw-alias-state-warn-label)}
-.ddr-one{margin:10px 0 8px;font-size:14px;line-height:22px;font-weight:500}
-.ddr-discovery{margin:10px 0 0;padding:8px 10px;border-left:2px solid var(--dsw-alias-brand-primary-new-colorprimary-new-color,#5686fe);border-radius:0 6px 6px 0;background:var(--dsw-alias-interactive-bg-hover);overflow-wrap:anywhere}
-.ddr-discovery h4{margin:0 0 3px;font-size:11px;font-weight:500;color:var(--dsw-alias-label-primary)}
-.ddr-discovery p{margin:0;font-size:12px;line-height:19px;color:var(--dsw-alias-label-secondary)}
+.ddr-one{margin:8px 0 6px;font-size:14px;line-height:22px;font-weight:500}
+.ddr-discovery{margin:10px 0 0;padding:8px 10px;font-size:12px;line-height:19px;color:var(--dsw-alias-label-secondary);border-left:2px solid var(--dsw-alias-brand-primary-new-colorprimary-new-color,#5686fe);border-radius:0 6px 6px 0;background:var(--dsw-alias-interactive-bg-hover);overflow-wrap:anywhere}
+.ddr-discovery b{font-weight:500;color:var(--dsw-alias-label-primary)}
 .ddr-session-link{margin-left:6px;padding:0 6px;border:.5px solid var(--dsw-alias-border-l2);border-radius:5px;background:none;color:var(--dsw-alias-brand-primary-new-colorprimary-new-color,#5686fe);font:inherit;font-size:11px;line-height:20px;cursor:pointer;white-space:nowrap;vertical-align:baseline}
 .ddr-session-link:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .ddr-session-link:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:2px}
-.ddr-alerts{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.ddr-alerts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0}
 .ddr-alert{font-size:12px;line-height:18px;padding:1px 8px;border-radius:999px;color:var(--dsw-alias-state-warn-label);background:color-mix(in srgb,var(--dsw-alias-state-warn-label) 10%,transparent)}
+.ddr-usage{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.ddr-usage b{font-weight:500;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
+.ddr-usage-cost{font-variant-numeric:tabular-nums}
+.ddr-usage .ddr-delta{font-variant-numeric:tabular-nums}
+.ddr-usage .ddr-delta.up{color:var(--dsw-alias-state-warn-label)}
+.ddr-usage .ddr-delta.down{color:var(--dsw-alias-state-success-primary)}
+.ddr-gen{font-variant-numeric:tabular-nums}
 .ddr-list{margin:8px 0 0;padding:0;list-style:none;display:grid;gap:4px}
 .ddr-list li{display:grid;grid-template-columns:40px minmax(0,1fr);gap:6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
 .ddr-list li span:first-child{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
 .ddr-list li b{color:var(--dsw-alias-label-primary);font-weight:500}
 .ddr-carry{margin-top:10px;padding-top:8px;border-top:.5px solid var(--dsw-alias-border-l2)}
-.ddr-carry-scroll{margin-top:8px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-gutter:stable;max-height:180px}
+/* 待续区默认只露出两条：真实高度由脚本按前两条测量后写入内联 max-height（≤2 条时清除）。 */
+.ddr-carry-scroll{margin-top:8px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-gutter:stable}
 .ddr-carry-scroll>.ddr-list{margin-top:0}
 .ddr-carry-scroll:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:2px}
 .ddr-carry h4{margin:0 0 4px;font-size:12px;font-weight:500;color:var(--dsw-alias-label-primary)}
@@ -51,9 +57,6 @@
 .ddr-btn.primary{background:var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-primary-foreground);box-shadow:none;font-weight:500}
 .ddr-btn.primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover, var(--dsw-alias-brand-primary))}
 .ddr-btn:disabled{cursor:not-allowed;opacity:.4}
-.ddr-spark{display:flex;align-items:flex-end;gap:3px;height:22px}
-.ddr-spark i{display:block;width:6px;border-radius:2px;background:var(--dsw-alias-border-l4)}
-.ddr-spark i:last-child{background:var(--dsw-alias-label-secondary)}
 .ddr-empty{color:var(--dsw-alias-label-secondary);font-size:12px;margin:6px 0}
 .ddr-shimmer{color:var(--dsw-alias-label-tertiary)}
 
@@ -134,12 +137,11 @@
 .ddr-report>span{flex:1 1 140px;overflow-wrap:anywhere}
 .ddr-report>.ddr-link{flex:none;min-height:28px}
 .ddr-reports{min-width:0;max-width:100%}
-.ddr-line,.ddr-actions{flex-wrap:wrap}
-.ddr-line>*{min-width:0}
-.ddr-spark{flex:none}
+.ddr-actions{flex-wrap:wrap}
+.ddr-alerts>*{min-width:0}
 .ddr-title{flex-wrap:wrap}
 .ddr-fallback{margin:4px 0 8px}
-.ddr-weather-date{font-variant-numeric:tabular-nums}
+.ddr-wx{font-variant-numeric:tabular-nums}
 .ddr-viewer-head{flex-wrap:wrap}
 .ddr-viewer-head h3{white-space:normal;overflow-wrap:anywhere;flex:1 1 100%}
 .ddr-viewer-head .ddr-x{margin-left:auto}
