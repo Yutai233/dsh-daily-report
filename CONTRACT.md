@@ -194,11 +194,12 @@ export function analyzeHealth(facts, { enabled, sitLimitMin = 50, lateHour = 23,
     "host": "dsh 08:52 启动，在线 6h20m" | null,
     "headline": "3 个会话 · 105 次工具 · 84 万 tokens（约 ¥1.20）",
     "oneLiner": "完成插件调研，开始设计日报功能方案。",
+    "discovery": null,                    // string|null；模型判断确实值得展示才填写
     "alerts": ["连续用机 2h10m 未休息", "23:40 后仍在工作"],
     "carryOverCount": 2
   },
   "sections": {                           // 每个 section 为 null 表示“今天没变化，不渲染”
-    "mainline": [{ "time": "09:12", "title": "…", "summary": "…", "sessionId": "…" }] | null,
+    "mainline": null,                      // 兼容旧归档字段；新日报不生成、渲染器不显示
     "usage": {
       "rows": [{ "label": "Tokens", "value": "84 万", "delta": "+23%", "trend": "up"|"down"|"flat"|null }],
       "cacheHitRate": "62%", "peakShare": "60%", "tips": ["…"], "priciest": "… 0.31 元",
@@ -212,7 +213,7 @@ export function analyzeHealth(facts, { enabled, sitLimitMin = 50, lateHour = 23,
     } | null,
     "blockers": { "items": ["pwsh 失败 2 次（exit code: 1）", "LLM 重试 3 次（SERVER×3）", "1 轮被中断", "src/index.js 改了 9 次，可能在反复折腾"] } | null,
     "health": { "rough": false, "lines": ["…"] } | null,
-    "carryOver": [{ "text": "…", "title": "…", "kind": "todo" }] | null,
+    "carryOver": [{ "text": "…", "title": "…", "kind": "todo", "sessionId": "…" }] | null,
     "weekly": { "days": [{ "date": "11-10", "sessions": 3, "tokens": 0, "costCny": 0 }], "topProjects": "…", "mainline": ["…"] } | null   // 仅周/月报
   },
   "appendix": {
@@ -226,11 +227,20 @@ export function analyzeHealth(facts, { enabled, sitLimitMin = 50, lateHour = 23,
 ## 5. 渲染器
 ```js
 // render/html.js
-export function renderHtml(report, { redact = false } = {}) → string
+export function renderHtml(report, { redact = false, sessionLinks = false } = {}) → string
 // render/markdown.js
 export function renderMarkdown(report) → string
 ```
-- HTML：**单文件**，内联 CSS + 内联 SVG，**无 `<script>`、无外链**（字体用系统字体栈）。第 1 层常显，其中近 7 天 tokens 柱状图折叠在 `<details class="spark">` 内、默认收起；第 2 层按 **待续 → 主线 → 用量 → 工具 → 卡点 → 作息 →（周/月概览）** 顺序渲染，每段一个 `<details>`，待续与主线默认展开，其余折叠；第 3 层附录 `<details>` 默认折叠。暗色/亮色跟随 `prefers-color-scheme`。`redact=true` 时把 cwd、文件路径、域名替换为 `***`（脱敏分享）。
+- HTML：**单文件**，内联 CSS + 内联 SVG，**无 `<script>`、无外链**（字体用系统字体栈）。第 1 层常显，三项关键指标采用标签、数值、涨跌幅同行的紧凑布局，窄屏自然换行；其中近 7 天 tokens 柱状图折叠在 `<details class="spark">` 内、默认收起；第 2 层按 **待续 → 用量 → 工具 → 卡点 → 作息 →（周/月概览）** 顺序渲染，每段一个 `<details>`，仅待续默认展开，其余折叠；旧归档中的 `sections.mainline` 不再渲染，逐会话摘要保留在附录；第 3 层附录 `<details>` 默认折叠。暗色/亮色跟随 `prefers-color-scheme`。`redact=true` 时把 cwd、文件路径、域名替换为 `***`（脱敏分享）。
 - 所有文本必须 `escapeHtml`。
 - “只写有变化的内容”：section 为 null 就不渲染该段；`layer1.alerts` 为空就不渲染警示行。
 - Markdown：全量，同样的层次；第 2 层用 `## `，附录用 `## 附录`；表格用 GFM。
+
+## 6. 断点续工与每日意外发现
+
+- 日报、周报、月报的 `sections.carryOver[]` 保留采集器给出的 `sessionId`；老报告没有 ID 时不伪造目的地。卡片与 DSH 内完整报告在正文后显示「相关会话」按钮，通过 `uiWorkspace.openSession(sessionId)` 原生导航；失败留在原界面并显示错误。
+- `summarizeDay()` 返回 `{ oneLiner, discovery, mode, llmCalls }`。现有 DAY 请求合并生成 JSON `{ "oneLiner": "…", "discovery": null|string }`，不增加模型请求次数；有具体依据且有新意才写发现，禁止为了填空重复摘要、待办、成本或健康提醒。发现清理后最多 180 字。
+- `facts.discovery` 与 `report.layer1.discovery` 为 `string|null`，旧字段缺失视为 null。仅统计、无可用模型、模型失败、格式错误或没有值得展示的内容时不生成模板发现。周期回填不调用模型生成发现。
+- 卡片与 HTML 在总览下、明日待续上方按需显示发现；Markdown 同步归档。空值时标题与容器一并省略。
+- `renderHtml(report, { redact = false, sessionLinks = false })` 仍输出无脚本的单文件。仅 DSH 的 generate/report RPC 以 `sessionLinks:true` 输出按钮，并向客户端提供结构化来源白名单。导出的 HTML 不显示无效按钮，Markdown 留存会话 ID。
+- 无可跳转会话的查看器继续使用 `sandbox=""`。交互报告只授权 `allow-scripts`（不允许 same-origin、弹窗、表单或顶层导航），CSP 仅允许随机 nonce 的可信点击桥；原报告脚本、内联事件及网络资源保持禁止。父页只接受当前 iframe、当前报告、匹配 token 且在结构化会话白名单内的消息；桥只处理真实用户点击/键盘激活。

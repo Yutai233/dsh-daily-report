@@ -67,8 +67,18 @@ try {
           assert.equal(state.blue, theme === 'light' ? 'rgb(65, 118, 230)' : 'rgb(86, 134, 254)')
           assert.equal(state.animations, 0, `${label}: no automatic entrance animation`)
           assert.ok(state.transforms.every(x => x === 'none'), `${label}: no initial transforms`)
-          const expected = ['carryOver', 'mainline'].filter(k => report.sections?.[k] != null).map(k => k === 'mainline' ? '今日主线' : '明日待续')
+          const expected = report.sections?.carryOver != null ? ['明日待续'] : []
           assert.deepEqual(state.open, expected, `${label}: default open semantics`)
+          if (width === 800 && report.sections?.usage) {
+            const metrics = await page.locator('.overview .metric').evaluateAll(items => items.map(el => {
+              const parts = [...el.children].map(x => x.getBoundingClientRect());
+              const r = el.getBoundingClientRect();
+              return { top: r.top, height: r.height, inline: parts.every(x => Math.min(...parts.map(p => p.bottom)) > x.top) };
+            }))
+            assert.equal(metrics.length, 3)
+            assert.ok(metrics.every(x => Math.abs(x.top - metrics[0].top) < 1 && x.inline && x.height < 40), `${label}: labels, values and changes share one compact row`)
+          }
+          assert.ok(!state.open.includes('今日主线'))
           if (name === 'daily' && motion === 'reduce') await page.screenshot({ path: join(out, `${theme}-${width}.png`), fullPage: true })
           await page.locator('details').evaluateAll(elements => elements.forEach(el => { el.open = true }))
           await page.evaluate(async () => { await Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))) })

@@ -136,6 +136,7 @@ test('report: only-what-changed sections and 7-day deltas', async () => {
   await summarizeDay(f, normalizeConfig({}), {})
   const hist = [{ date: '2026-11-09', totals: { ...f.totals, sessions: 1, tokens: { ...f.totals.tokens, total: 3100 }, costCny: f.totals.costCny / 2 } }]
   const r = buildDailyReport(f, hist, normalizeConfig({}))
+  assert.equal(r.sections.mainline, null)
   assert.equal(r.sections.usage.rows[0].delta, '+100%')
   assert.equal(r.sections.usage.rows[0].trend, 'up')
   assert.ok(r.sections.blockers.items.some((x) => x.includes('LLM 重试')))

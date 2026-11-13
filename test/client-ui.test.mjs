@@ -8,11 +8,11 @@ function harness() {
   let slots = [], cursor = 0;
   const React = {
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }),
-    Fragment: 'fragment', useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (v) => { slots[i] = typeof v === 'function' ? v(slots[i]) : v; }]; },
+    Fragment: 'fragment', useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial; return [slots[i], (v) => { slots[i] = typeof v === 'function' ? v(slots[i]) : v; }]; },
     useEffect() {}, useLayoutEffect() {}, useRef: () => ({ current: null }), useCallback: (f) => f,
     useSyncExternalStore: (_, get) => get(),
   };
-  const api = new Function('require', source.slice(0, source.lastIndexOf('return {\n  inject:')) + '\nreturn { makeStore, NumberInput, ReportDirectory, SettingsSection, MorningCard, Viewer, Seg };')((name) => name === 'react' ? React : name === 'react-dom' ? { createPortal: (x) => x } : {});
+  const api = new Function('require', source.slice(0, source.lastIndexOf('return {\n  inject:')) + '\nreturn { makeStore, NumberInput, ReportDirectory, SettingsSection, MorningCard, Viewer, Seg, reportFrameHtml, bindReportSessionBridge, reportSessionIds };')((name) => name === 'react' ? React : name === 'react-dom' ? { createPortal: (x) => x } : {});
   return { api, render(fn, props) { cursor = 0; return fn(props); } };
 }
 function nodes(root) { return root && typeof root === 'object' ? [root, ...root.children.flatMap(nodes)] : []; }
@@ -108,6 +108,23 @@ test('morning card labels fallback and weather date separately from report date'
   assert.match(text(tree), /11月10日/);
 });
 
+test('morning card retains all six carry-over items and has a keyboard scroll region', () => {
+  global.document = { body: {} };
+  const { api, render } = harness();
+  const carryOver = Array.from({ length: 6 }, (_, i) => ({ kind: 'todo', text: '待办正文 ' + (i + 1), title: '来源会话 ' + (i + 1) }));
+  const card = { key: '2026-11-12', label: '11月12日', layer1: { carryOverCount: 4, oneLiner: '保留完整摘要。'.repeat(20) }, carryOver, mainline: [{ title: '旧版主线不应出现' }] };
+  const store = mockStore({ config: {}, card });
+  const tree = render(api.MorningCard, { store, anchorRef: { current: null }, onClose() {} });
+  assert.match(text(tree), /明日待续 · 6/);
+  assert.ok(text(tree).includes(card.layer1.oneLiner));
+  for (const item of carryOver) { assert.ok(text(tree).includes(item.text)); assert.ok(text(tree).includes(item.title)); }
+  assert.doesNotMatch(text(tree), /旧版主线/);
+  assert.equal(nodes(tree).find(n => n.props.className === 'ddr-card-scroll').props.tabIndex, 0);
+  card.carryOver = [];
+  const empty = render(api.MorningCard, { store, anchorRef: { current: null }, onClose() {} });
+  assert.doesNotMatch(text(empty), /旧版主线/);
+});
+
 test('report directory form edits only reportsDir and supports restoring default', async () => {
   const { api, render } = harness(); const patches = [];
   const props = { store: { patch: async (p) => { patches.push(p); } }, value: '', actualPath: 'C:/default/reports', defaultPath: 'C:/default/reports' };
@@ -130,6 +147,30 @@ test('segmented radios use one tab stop and arrow-key selection', () => {
   assert.deepEqual(selected, ['c']); assert.deepEqual(focused, [2]);
 });
 
+test('viewer ignores stale load and error events when reopening the same report', () => {
+  global.document = { body: {} };
+  const { api, render } = harness();
+  const makeProps = (id) => ({ store: mockStore({}, { viewer: { id, title: '同一报告', html: '<h1>每日简报</h1>', key: 'day', kind: 'daily' } }) });
+  const oldProps = makeProps(1);
+  const oldTree = render(api.Viewer, oldProps);
+  const oldFrame = nodes(oldTree).find(n => n.type === 'iframe');
+  oldFrame.props.onLoad();
+  assert.doesNotMatch(text(render(api.Viewer, oldProps)), /正在载入报告/);
+  const newProps = makeProps(2);
+  let tree = render(api.Viewer, newProps);
+  const newFrame = nodes(tree).find(n => n.type === 'iframe');
+  assert.notEqual(oldFrame.props.key, newFrame.props.key);
+  assert.match(text(tree), /正在载入报告/);
+  oldFrame.props.onError();
+  oldFrame.props.onLoad();
+  tree = render(api.Viewer, newProps);
+  assert.doesNotMatch(text(tree), /视图载入失败/);
+  assert.match(text(tree), /正在载入报告/);
+  newFrame.props.onLoad();
+  tree = render(api.Viewer, newProps);
+  assert.doesNotMatch(text(tree), /正在载入报告|视图载入失败/);
+});
+
 test('viewer keeps empty sandbox and denies external resources before report markup', () => {
   global.document = { body: {} };
   const { api, render } = harness();
@@ -144,4 +185,63 @@ test('viewer keeps empty sandbox and denies external resources before report mar
   frame.props.onError();
   const failed = render(api.Viewer, { store: mockStore({}, { viewer: { title: 'synthetic', html, key: 'sample', kind: 'daily' } }) });
   assert.match(text(failed), /报告视图载入失败/);
+});
+
+test('morning card adds inline session buttons only for known sources and conditionally shows discovery', async () => {
+  global.document = { body: {} };
+  const { api, render } = harness(); const opened = [];
+  const card = { layer1: { oneLiner: '今天完成了报告样式。', discovery: '多次手动校验同一组布局，可合并为一个回归脚本。' }, carryOver: [
+    { kind: 'todo', text: '补窄屏测试', title: '报告改版', sessionId: 'source-1' },
+    { kind: 'interrupted', text: '旧版待续记录' },
+  ] };
+  const store = mockStore({ config: {}, card }, { openSession: async (id) => opened.push(id) });
+  let tree = render(api.MorningCard, { store, anchorRef: {}, onClose() {} });
+  const button = nodes(tree).filter(n => n.props.className === 'ddr-session-link');
+  assert.equal(button.length, 1); assert.equal(button[0].props.title, '打开会话：报告改版');
+  await button[0].props.onClick(); assert.deepEqual(opened, ['source-1']);
+  assert.match(text(tree), /每日意外发现/);
+  assert.ok(text(tree).indexOf(card.layer1.oneLiner) < text(tree).indexOf('每日意外发现'));
+  assert.ok(text(tree).indexOf('每日意外发现') < text(tree).indexOf('明日待续'));
+  for (const value of [null, undefined, '', '   ']) {
+    card.layer1.discovery = value;
+    tree = render(api.MorningCard, { store, anchorRef: {}, onClose() {} });
+    assert.doesNotMatch(text(tree), /每日意外发现/);
+  }
+});
+
+test('native session navigation closes report and card on success, but preserves them on failure', async () => {
+  const { api } = harness(); const opened = []; let fail = false;
+  const store = api.makeStore({ rpc: {} }, async (id) => { if (fail) throw Error('会话已删除'); opened.push(id); });
+  store.showHtml('report', '<h1>Report</h1>'); store.openCard();
+  await store.openSession('source-1');
+  assert.deepEqual(opened, ['source-1']); assert.equal(store.get().viewer, null); assert.equal(store.get().cardOpen, false);
+  store.showHtml('report', '<h1>Report</h1>'); store.openCard(); fail = true;
+  await store.openSession('missing');
+  assert.match(store.get().error, /无法打开相关会话.*会话已删除/); assert.ok(store.get().viewer); assert.equal(store.get().cardOpen, true);
+  const legacy = api.makeStore({ rpc: {} }); await legacy.openSession('source-1');
+  assert.match(legacy.get().error, /不支持会话跳转/);
+  store.dispose(); legacy.dispose();
+});
+
+test('interactive viewer permits only its nonce bridge with source, token, current-view and destination checks', () => {
+  global.document = { body: {} };
+  const { api, render } = harness(); const opened = []; let listener, removed;
+  global.window = { addEventListener: (type, fn) => { assert.equal(type, 'message'); listener = fn; }, removeEventListener: (_, fn) => { removed = fn; } };
+  const frame = { contentWindow: {} }; const v = { html: '<h1>Report</h1>', sessionIds: ['source-1'] };
+  const store = { get: () => ({ viewer: v }), openSession: (id) => opened.push(id) };
+  const dispose = api.bindReportSessionBridge(frame, v, 'random-token', store);
+  const data = { type: 'ddr-open-session', token: 'random-token', sessionId: 'source-1' };
+  listener({ source: {}, data }); listener({ source: frame.contentWindow, data: { ...data, token: 'wrong' } });
+  listener({ source: frame.contentWindow, data: { ...data, sessionId: 'arbitrary' } });
+  assert.deepEqual(opened, []);
+  listener({ source: frame.contentWindow, data }); assert.deepEqual(opened, ['source-1']);
+  store.get = () => ({ viewer: { ...v } }); listener({ source: frame.contentWindow, data }); assert.equal(opened.length, 1);
+  dispose(); assert.equal(removed, listener);
+  const tree = render(api.Viewer, { store: mockStore({}, { viewer: v }) });
+  const iframe = nodes(tree).find(n => n.type === 'iframe');
+  assert.equal(iframe.props.sandbox, 'allow-scripts');
+  assert.match(iframe.props.srcDoc, /script-src 'nonce-[a-f0-9]{32}'/);
+  assert.doesNotMatch(iframe.props.srcDoc, /allow-same-origin|allow-popups|allow-top-navigation/);
+  assert.match(iframe.props.srcDoc, /if\(!e.isTrusted\)return/);
+  delete global.window;
 });

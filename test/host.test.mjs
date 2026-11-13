@@ -8,10 +8,15 @@ import path from 'node:path'
 const dir = mkdtempSync(path.join(tmpdir(), 'ddr-host-'))
 process.env.DSH_DAILY_REPORT_DIR = dir
 const { apply, inject } = await import('../lib/index.js')
+const { summarizeDay } = await import('../lib/summarize.js')
+const pendingTodos = Array.from({ length: 6 }, (_, i) => ({ content: '待续事项 ' + (i + 1), status: i === 0 ? 'in_progress' : 'pending' }))
 
 function mockCtx(raw = {
   list: async () => [{ id: 'synthetic', createdAt: new Date('2026-11-10T00:00:00').getTime() }],
-  read: async () => [{ type: 'user/message', seq: 1, time: new Date('2026-11-10T10:00:00').getTime(), data: { source: { kind: 'user' }, content: '合成测试消息' } }],
+  read: async () => [
+    { type: 'user/message', seq: 1, time: new Date('2026-11-10T10:00:00').getTime(), data: { source: { kind: 'user' }, content: '合成测试消息' } },
+    { type: 'todo/write', seq: 2, time: new Date('2026-11-10T10:01:00').getTime(), data: { todos: pendingTodos } },
+  ],
   titles: async () => ({ synthetic: '合成测试' }),
 }) {
   const routes = new Map()
@@ -56,9 +61,41 @@ test('inject declares only always-present services', () => {
   assert.deepEqual(inject, ['sessionQuery', 'connection', 'tools', 'systemPrompt'])
 })
 
-test('host entry: RPC round trip, generation, dispose', { timeout: 240000 }, async () => {
+for (const length of [90, 300]) {
+  test('day summary preserves complete model output of ' + length + ' characters', async () => {
+    const expected = '今'.repeat(length - 5) + '完整结尾。'
+    const sessionSummary = '已完成后端修改并通过回归验证。'
+    const facts = {
+      date: '2026-11-10',
+      sessions: [{ id: 'long-day-summary-' + length, title: '摘要回归', lastSeq: 1 }],
+      _packs: { ['long-day-summary-' + length]: '完成后端修改与验证。' },
+    }
+    let calls = 0
+    const result = await summarizeDay(facts, {
+      privacy: 'cloud', cloudRoute: { provider: 'mock', model: 'mock' },
+    }, {
+      llm: {
+        async *stream() {
+          calls++
+          yield { type: 'text-delta', text: calls === 1 ? sessionSummary : expected }
+        },
+      },
+    })
+    assert.equal(calls, 2, 'session and day both use the model')
+    assert.equal(facts.sessions[0].summary, sessionSummary)
+    assert.equal(result.oneLiner, expected, 'day summary retains every model character and its ending')
+    assert.equal(result.oneLiner.length, length)
+    assert.equal(result.oneLiner.includes('…'), false, 'no truncation ellipsis is inserted')
+  })
+}
+
+test('host entry: RPC round trip, generation, dispose', { timeout: 240000 }, async (t) => {
   const { ctx, routes, effects, registeredTools } = mockCtx()
   apply(ctx, {})
+  t.after(async () => {
+    for (const e of effects) if (typeof e === 'function') await e()
+    assert.equal(routes.size, 0, 'routes removed on dispose')
+  })
   assert.equal(routes.size, 10)
   assert.equal(registeredTools.length, 1, 'link-independent ToolDefinition is always registered')
   assert.equal(registeredTools[0].parameters.type, 'object')
@@ -79,6 +116,12 @@ test('host entry: RPC round trip, generation, dispose', { timeout: 240000 }, asy
   assert.equal(g.ok, true, JSON.stringify(g.error))
   assert.match(g.value.html, /DSH 每日简报/)
   assert.ok(g.value.card.layer1.headline.includes('会话'))
+  const expectedCarryOver = pendingTodos.map((todo) => ({ text: todo.content, title: '合成测试', kind: 'todo', sessionId: 'synthetic' }))
+  assert.ok(g.value.sessionIds.includes('synthetic'))
+  assert.equal((g.value.html.match(/data-ddr-session="synthetic"/g) || []).length, 6)
+  assert.equal(g.value.card.layer1.discovery, null, 'local-only never invents discoveries')
+  assert.deepEqual(g.value.card.carryOver, expectedCarryOver, 'generated card contains all six pending items')
+  assert.equal(Object.hasOwn(g.value.card, 'mainline'), false, 'card omits the removed mainline section')
 
   const w = await rpc(routes, 'generate', { kind: 'weekly', date: '2026-11-12' })
   assert.equal(w.ok, true, JSON.stringify(w.error))
@@ -86,6 +129,10 @@ test('host entry: RPC round trip, generation, dispose', { timeout: 240000 }, asy
 
   const r = await rpc(routes, 'report', { kind: 'daily', key: '2026-11-10' })
   assert.equal(r.value.report.kind, 'daily')
+  assert.deepEqual(r.value.report.sections.carryOver, expectedCarryOver, 'full report retains all six pending items')
+  assert.deepEqual(g.value.card.carryOver, r.value.report.sections.carryOver, 'generated card matches full report')
+  assert.deepEqual(r.value.card.carryOver, r.value.report.sections.carryOver, 'saved-report card matches full report')
+  assert.equal(Object.hasOwn(r.value.card, 'mainline'), false)
   const bad = await rpc(routes, 'report', { kind: 'daily', key: '../../x' })
   assert.equal(bad.ok, false)
 
@@ -93,6 +140,8 @@ test('host entry: RPC round trip, generation, dispose', { timeout: 240000 }, asy
   assert.ok(s.value.reports.daily.includes('2026-11-10'))
   assert.ok(s.value.reports.weekly.includes('2026-W45'))
   assert.equal(s.value.generating, false, 'queue is released after generation')
+  assert.deepEqual(s.value.card.carryOver, r.value.report.sections.carryOver, 'popup state card matches full report')
+  assert.equal(Object.hasOwn(s.value.card, 'mainline'), false)
   assert.equal(s.value.toolAvailable, true)
   for (const payload of [{ kind: 'invalid' }, { date: '2026-02-30' }, { current: 'yes' }]) {
     assert.equal((await rpc(routes, 'generate', payload)).ok, false)
@@ -143,8 +192,6 @@ test('host entry: RPC round trip, generation, dispose', { timeout: 240000 }, asy
   const d = await rpc(routes, 'dismiss')
   assert.equal(d.ok, true)
 
-  for (const e of effects) if (typeof e === 'function') await e()
-  assert.equal(routes.size, 0, 'routes removed on dispose')
 })
 
 test.after(() => rmSync(dir, { recursive: true, force: true }))

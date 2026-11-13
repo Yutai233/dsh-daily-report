@@ -28,7 +28,7 @@ test('overview exposes escaped KPI and exactly one usage chart before folded con
   assert.equal((html.match(/aria-label="每日 tokens"/g) || []).length, 1)
   assert.match(header, /<details class="spark"><summary><span>每日 tokens<\/span>/)
   assert.doesNotMatch(header, /<details[^>]* open>/, 'the tokens chart must be folded by default')
-  assert.equal((html.match(/<details[^>]* open>/g) || []).length, 2)
+  assert.equal((html.match(/<details[^>]* open>/g) || []).length, 1)
 })
 
 test('only native disclosure height and its chevron may transition', () => {
@@ -56,6 +56,6 @@ test('all periods and empty reports retain their semantic content and disclosure
     assert.doesNotMatch(html, /<script|@import|(?:src|href)="https?:/i)
     assert.equal((html.match(/class="section-content"/g) || []).length, (html.match(/<details/g) || []).length)
     const openNames = [...html.matchAll(/<details[^>]* open><summary>([^<]+)/g)].map(x => x[1])
-    assert.deepEqual(openNames, ['carryOver', 'mainline'].filter(k => r.sections?.[k] != null).map(k => k === 'mainline' ? '今日主线' : '明日待续'))
+    assert.deepEqual(openNames, r.sections?.carryOver != null ? ['明日待续'] : [])
   }
 })

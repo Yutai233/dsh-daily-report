@@ -6,7 +6,7 @@ const { useState, useEffect, useRef, useCallback, useSyncExternalStore, useLayou
 
 /* ---------------------------------------------------------------- store */
 
-function makeStore(connection) {
+function makeStore(connection, navigateSession) {
   const listeners = new Set();
   let snap = { phase: 'loading', state: null, error: null, refreshError: null, busy: null, viewer: null, cardOpen: false, autoShown: false };
   const publish = (patch) => { snap = { ...snap, ...patch }; for (const fn of listeners) fn(); };
@@ -75,7 +75,7 @@ function makeStore(connection) {
         const v = await call('report', { kind, key });
         if (!alive || request !== viewRequest) return;
         if (!v || typeof v.html !== 'string' || !v.html.trim()) throw new Error('报告内容为空，请重新生成后再试。');
-        publish({ viewer: { title: title || key, html: v.html, kind, key, origin } });
+        publish({ viewer: { id: request, title: title || key, html: v.html, kind, key, origin, sessionIds: reportSessionIds(v.report || v.card) } });
       } catch (e) { if (alive && request === viewRequest) publish({ error: '无法查看报告：' + String(e.message || e) }); }
     },
     async open(kind, key, format) {
@@ -84,10 +84,21 @@ function makeStore(connection) {
       catch (e) { publish({ error: '无法打开报告：' + String(e.message || e) }); }
     },
     clearError() { publish({ error: null }); },
-    showHtml(title, html, kind, key, trigger) {
+    showHtml(title, html, kind, key, trigger, sessionIds = []) {
       if (typeof html !== 'string' || !html.trim()) { publish({ error: '报告内容为空，请重新生成后再试。' }); return; }
       ++viewRequest;
-      publish({ error: null, viewer: { title, html, kind, key, origin: captureViewerOrigin(trigger) } });
+      publish({ error: null, viewer: { id: viewRequest, title, html, kind, key, origin: captureViewerOrigin(trigger), sessionIds: sessionIds.filter((id) => typeof id === 'string' && id.trim()) } });
+    },
+    async openSession(sessionId) {
+      publish({ error: null });
+      try {
+        if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('没有可关联的会话');
+        if (typeof navigateSession !== 'function') throw new Error('当前 DSH 不支持会话跳转，请更新后再试');
+        await navigateSession(sessionId);
+        if (!alive) return;
+        ++viewRequest;
+        publish({ viewer: null, cardOpen: false });
+      } catch (e) { if (alive) publish({ error: '无法打开相关会话：' + String(e.message || e) }); }
     },
     closeViewer() { ++viewRequest; publish({ viewer: null }); },
     dispose() { alive = false; ++viewRequest; clearTimeout(timer); listeners.clear(); },
@@ -111,6 +122,7 @@ function captureViewerOrigin(trigger) {
 
 /** One surface grows out of the opener. Content is clipped, never stretched. */
 function createViewerMotion(panel, mask, content, origin, onClosed) {
+  content.inert = false;
   const media = window.matchMedia('(prefers-reduced-motion: reduce)');
   let resting = panel.getBoundingClientRect();
   const center = (r) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
@@ -189,6 +201,29 @@ function createViewerMotion(panel, mask, content, origin, onClosed) {
   };
 }
 
+/** Session destinations come from structured report data, never arbitrary HTML. */
+function reportSessionIds(report) {
+  return [...new Set((report?.sections?.carryOver || report?.carryOver || []).map((c) => c.sessionId).filter((id) => typeof id === 'string' && id.trim()))];
+}
+
+/** Isolated iframe bridge: no same-origin, popup, form or top-navigation powers. */
+function reportFrameHtml(html, theme, token, interactive) {
+  const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'" + (interactive ? "; script-src 'nonce-" + token + "'" : '');
+  const bridge = interactive ? '<script nonce="' + token + '">document.addEventListener("click",function(e){if(!e.isTrusted)return;var b=e.target.closest("button[data-ddr-session]");if(!b)return;e.preventDefault();parent.postMessage({type:"ddr-open-session",token:"' + token + '",sessionId:b.getAttribute("data-ddr-session")},"*")});</script>' : '';
+  return '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="' + policy + '">' + bridge + '</head><body>' + html.replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh\b[^>]*>/gi, '') + '<style>' + theme + '</style></body></html>';
+}
+
+/** Validate both the frame identity and the report-specific destination list. */
+function bindReportSessionBridge(frame, viewer, token, store) {
+  const onMessage = (event) => {
+    const data = event.data;
+    if (!frame || event.source !== frame.contentWindow || store.get().viewer !== viewer || !data || data.type !== 'ddr-open-session' || data.token !== token || !(viewer.sessionIds || []).includes(data.sessionId)) return;
+    store.openSession(data.sessionId);
+  };
+  window.addEventListener('message', onMessage);
+  return () => window.removeEventListener('message', onMessage);
+}
+
 function IconClose() {
   return P.IconCloseOutlineRegular ? h(P.IconCloseOutlineRegular, { size: 14 }) : h('span', { 'aria-hidden': true }, '×');
 }
@@ -197,11 +232,11 @@ function IconClose() {
 
 function HeroFishSvg({ size, className, hovering }) {
   const vb = P.FISH_LOGO_VIEWBOX || { width: 24, height: 18 };
-  const d = P.FISH_LOGO_PATH;
+  const d = P.FISH_LOGO_PATH || HERO_REST_PATH;
   return h('svg', {
-    className, width: size, height: size * vb.height / vb.width,
+    className: ['ddr-fish', className].filter(Boolean).join(' '), width: size, height: size * vb.height / vb.width,
     viewBox: '0 0 ' + vb.width + ' ' + vb.height, fill: 'none', 'aria-hidden': 'true',
-  }, h('path', { d, fill: 'currentColor' },
+  }, h('path', { key: hovering ? 'swimming' : 'resting', d, fill: 'currentColor' },
     hovering ? h('animate', {
       attributeName: 'd', values: [d, HERO_SWIM_UP_PATH, d, HERO_SWIM_DOWN_PATH, d].join(';'),
       keyTimes: '0;0.35;0.55;0.75;1', calcMode: 'spline',
@@ -216,29 +251,73 @@ function Spark({ data }) {
     data.slice(-7).map((d, i) => h('i', { key: i, style: { height: Math.max(2, Math.round((d.value || 0) / max * 22)) + 'px' }, title: d.date })));
 }
 
+const MorningCardBoundary = React.Component ? class extends React.Component {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error) { console.error('[dsh-daily-report] morning card failed:', error); }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return ReactDOM.createPortal(h('div', { className: 'ddr-root ddr-card-failure', role: 'alert' },
+      h('span', null, '简报显示出错，请关闭后重新打开。'),
+      h('button', { type: 'button', className: 'ddr-btn', onClick: this.props.onClose }, '关闭提示')), document.body);
+  }
+} : ({ children }) => children;
+
 function MorningCard({ store, anchorRef, onClose }) {
   const snap = useSyncExternalStore(store.subscribe, store.get);
   const ref = useRef(null);
-  const [pos, setPos] = useState(null);
+  const carryRef = useRef(null);
   const place = useCallback(() => {
     const a = anchorRef.current; const c = ref.current;
-    if (!a || !c) return;
+    if (!a || !c || !a.isConnected || !c.isConnected) return;
+    // Position is DOM-only: measuring an animated surface must never enqueue a
+    // React render from a layout effect or a ResizeObserver callback.
+    const setStyle = (node, key, value) => {
+      if (node.style.getPropertyValue(key) !== value) node.style.setProperty(key, value);
+    };
+    const carry = carryRef.current;
+    const items = carry?.querySelectorAll('li');
+    if (items?.length > 3) {
+      // offset geometry stays in layout pixels while ddr-pop scales the card.
+      const height = items[2].offsetTop + items[2].offsetHeight - items[0].offsetTop;
+      setStyle(carry, 'max-height', Math.max(1, height) + 'px');
+    } else if (carry?.style.maxHeight) carry.style.removeProperty('max-height');
     const r = a.getBoundingClientRect();
-    const w = c.offsetWidth; const hgt = c.offsetHeight;
+    const insetTop = Math.max(16, (parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dsh-frame-overlay-top')) || 0) + 12);
+    const gap = 12;
+    const w = c.offsetWidth;
+    const scroll = c.querySelector('.ddr-card-scroll');
+    const naturalHeight = c.offsetHeight + (scroll ? Math.max(0, scroll.scrollHeight - scroll.clientHeight) : 0);
     const cx = r.left + r.width / 2;
     let left = Math.round(cx - w / 2);
     left = Math.max(16, Math.min(left, window.innerWidth - w - 16));
-    let top = Math.round(r.top - hgt - 12);
-    let placement = 'above';
-    if (top < 48) { top = Math.round(r.bottom + 12); placement = 'below'; }
-    const arrow = Math.round(cx - left);
-    // Only commit real changes: this runs after every render, so an unconditional
-    // setState here would loop forever.
-    setPos((prev) => (prev && prev.left === left && prev.top === top && prev.placement === placement && prev.arrow === arrow ? prev : { left, top, placement, arrow }));
+    const above = Math.max(0, r.top - gap - insetTop);
+    const below = Math.max(0, window.innerHeight - 16 - r.bottom - gap);
+    const placement = naturalHeight <= above || above >= below ? 'above' : 'below';
+    setStyle(c, 'max-height', Math.max(1, Math.floor(placement === 'above' ? above : below)) + 'px');
+    const hgt = c.offsetHeight;
+    const desiredTop = placement === 'above' ? r.top - hgt - gap : r.bottom + gap;
+    const top = Math.round(Math.max(insetTop, Math.min(desiredTop, window.innerHeight - hgt - 16)));
+    const arrow = Math.max(16, Math.min(w - 16, Math.round(cx - left)));
+    setStyle(c, 'left', left + 'px');
+    setStyle(c, 'top', top + 'px');
+    setStyle(c, '--ddr-arrow-x', arrow + 'px');
+    if (c.dataset.placement !== placement) c.dataset.placement = placement;
   }, [anchorRef]);
-  useLayoutEffect(() => { place(); });
+  useLayoutEffect(() => { place(); }, [place, snap.state, snap.busy, snap.error, snap.refreshError]);
   useEffect(() => {
-    window.addEventListener('resize', place);
+    let frame = null;
+    const schedulePlace = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => { frame = null; place(); });
+    };
+    window.addEventListener('resize', schedulePlace);
+    window.addEventListener('scroll', schedulePlace, true);
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(schedulePlace) : null;
+    if (ref.current) observer?.observe(ref.current);
+    if (anchorRef.current) observer?.observe(anchorRef.current);
+    const list = carryRef.current?.querySelector('ul');
+    if (list) observer?.observe(list);
     const onKey = (e) => { if (e.key === 'Escape') onClose(false); };
     const onDown = (e) => {
       if (store.get().viewer) return;
@@ -246,7 +325,14 @@ function MorningCard({ store, anchorRef, onClose }) {
     };
     document.addEventListener('keydown', onKey);
     document.addEventListener('pointerdown', onDown, true);
-    return () => { window.removeEventListener('resize', place); document.removeEventListener('keydown', onKey); document.removeEventListener('pointerdown', onDown, true); };
+    return () => {
+      observer?.disconnect();
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', schedulePlace);
+      window.removeEventListener('scroll', schedulePlace, true);
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onDown, true);
+    };
   }, [place, onClose, anchorRef]);
 
   const st = snap.state;
@@ -268,25 +354,37 @@ function MorningCard({ store, anchorRef, onClose }) {
       h('div', { className: 'ddr-line' }, h('span', null, l1.headline), card.usage ? h(Spark, { data: card.usage.spark }) : null),
       l1.oneLiner ? h('p', { className: 'ddr-one' }, l1.oneLiner) : null,
       l1.alerts && l1.alerts.length ? h('div', { className: 'ddr-alerts' }, l1.alerts.map((a, i) => h('span', { key: i, className: 'ddr-alert' }, '⚠ ' + a))) : null,
+      typeof l1.discovery === 'string' && l1.discovery.trim() ? h('aside', { className: 'ddr-discovery', 'aria-label': '每日意外发现' }, h('h4', null, '每日意外发现'), h('p', null, l1.discovery)) : null,
       card.carryOver && card.carryOver.length ? h('div', { className: 'ddr-carry' },
-        h('h4', null, '明日待续 · ' + l1.carryOverCount),
-        h('ul', { className: 'ddr-list' }, card.carryOver.map((c, i) => h('li', { key: i }, h('span', null, c.kind === 'todo' ? '待办' : '中断'), h('span', null, c.text))))) : null,
-      !card.carryOver?.length && card.mainline && card.mainline.length ? h('ul', { className: 'ddr-list' },
-        card.mainline.slice(0, 3).map((m, i) => h('li', { key: i }, h('span', null, m.time), h('span', null, h('b', null, m.title))))) : null,
+        h('h4', null, '明日待续 · ' + card.carryOver.length),
+        h('div', { ref: carryRef, className: 'ddr-carry-scroll', tabIndex: 0, role: 'region', 'aria-label': '明日待续列表' },
+          h('ul', { className: 'ddr-list' }, card.carryOver.map((c, i) => h('li', { key: i }, h('span', null, c.kind === 'todo' ? '待办' : '中断'), h('span', null, c.text, typeof c.sessionId === 'string' && c.sessionId.trim() ? h('button', { type: 'button', className: 'ddr-session-link', title: c.title ? '打开会话：' + c.title : '打开来源会话', onClick: () => store.openSession(c.sessionId) }, '相关会话') : null, c.title ? h('small', { className: 'ddr-carry-source' }, c.title) : null)))))) : null,
       h('div', { className: 'ddr-actions' },
         h('span', { className: 'ddr-meta' }, PRIVACY_LABEL[st.config.privacy] || ''),
         h('button', { type: 'button', className: 'ddr-btn', disabled: !!snap.busy, title: '重新生成', onClick: () => store.generate('daily', { date: card.key }).catch(() => {}) }, snap.busy ? '生成中…' : '刷新'),
         h('button', { type: 'button', className: 'ddr-btn primary', onClick: (e) => store.view('daily', card.key, 'DSH 每日简报 · ' + card.label, e.currentTarget) }, '查看完整报告')));
   }
   return ReactDOM.createPortal(h('section', {
-    ref, className: 'ddr-root ddr-card', role: 'dialog', 'aria-label': 'DSH 每日简报', 'data-placement': pos ? pos.placement : 'above',
-    style: pos ? { left: pos.left, top: pos.top, '--ddr-arrow-x': pos.arrow + 'px' } : { left: -9999, top: -9999 },
+    ref, className: 'ddr-root ddr-card', role: 'dialog', 'aria-label': 'DSH 每日简报', 'data-placement': 'above',
+    style: { left: -9999, top: -9999 },
   },
   h('header', { className: 'ddr-head' },
     h('div', { className: 'ddr-title' }, '每日简报', card ? h('small', null, card.label) : null),
     h('button', { type: 'button', className: 'ddr-x', 'aria-label': '今天不再弹出', title: '今天不再弹出', onClick: () => onClose(true) }, h(IconClose))),
-  body,
-  snap.error || snap.refreshError ? h('p', { className: 'ddr-note ddr-err', role: 'alert' }, snap.error || snap.refreshError) : null), document.body);
+  h('div', { className: 'ddr-card-scroll', tabIndex: 0, role: 'region', 'aria-label': '简报内容' },
+    body,
+    snap.error || snap.refreshError ? h('p', { className: 'ddr-note ddr-err', role: 'alert' }, snap.error || snap.refreshError) : null)), document.body);
+}
+
+function readReportTheme() {
+  if (typeof window === 'undefined' || !window.getComputedStyle) return '';
+  const style = window.getComputedStyle(document.documentElement);
+  const names = ['--dsw-font-family', '--dsw-alias-bg-base', '--dsw-alias-bg-layer-1', '--dsw-alias-bg-layer-2', '--dsw-alias-bg-layer-3', '--dsw-alias-bg-module-platform', '--dsw-alias-label-primary', '--dsw-alias-label-secondary', '--dsw-alias-label-tertiary', '--dsw-alias-border-l1', '--dsw-alias-border-l2', '--dsw-alias-border-l3', '--dsw-alias-state-business-primary', '--dsw-alias-brand-primary-new-colorprimary-new-color', '--dsw-radius-panel'];
+  const declarations = names.map((name) => {
+    const value = style.getPropertyValue(name).trim();
+    return value && !/[<>;{}]/.test(value) ? name + ':' + value : '';
+  }).filter(Boolean).join(';');
+  return ':root{' + declarations + '}';
 }
 
 function Viewer({ store }) {
@@ -296,6 +394,12 @@ function Viewer({ store }) {
   const mask = useRef(null);
   const content = useRef(null);
   const motion = useRef(null);
+  const frame = useRef(null);
+  const [bridgeToken] = useState(() => Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16).padStart(8, '0')).join(''));
+  useEffect(() => {
+    if (!v || !v.sessionIds?.length) return undefined;
+    return bindReportSessionBridge(frame.current, v, bridgeToken, store);
+  }, [v, bridgeToken, store]);
   const requestClose = useCallback(() => { if (motion.current) motion.current.close(); else store.closeViewer(); }, [store]);
   useLayoutEffect(() => {
     if (!v || !panel.current) return undefined;
@@ -303,20 +407,12 @@ function Viewer({ store }) {
     motion.current = current;
     return () => { current.dispose(); if (motion.current === current) motion.current = null; };
   }, [v, store]);
-  const [loaded, setLoaded] = useState(false);
-  const [frameError, setFrameError] = useState(false);
-  const [frameTheme, setFrameTheme] = useState('');
-  useEffect(() => {
+  const [loaded, setLoaded] = useState(null);
+  const [frameError, setFrameError] = useState(null);
+  const [frameTheme, setFrameTheme] = useState(readReportTheme);
+  useLayoutEffect(() => {
     if (!v) return undefined;
-    const sync = () => {
-      const style = window.getComputedStyle(document.documentElement);
-      const names = ['--dsw-font-family', '--dsw-alias-bg-base', '--dsw-alias-bg-layer-1', '--dsw-alias-bg-layer-2', '--dsw-alias-bg-layer-3', '--dsw-alias-bg-module-platform', '--dsw-alias-label-primary', '--dsw-alias-label-secondary', '--dsw-alias-label-tertiary', '--dsw-alias-border-l1', '--dsw-alias-border-l2', '--dsw-alias-border-l3', '--dsw-alias-state-business-primary', '--dsw-alias-brand-primary-new-colorprimary-new-color', '--dsw-radius-panel'];
-      const declarations = names.map((name) => {
-        const value = style.getPropertyValue(name).trim();
-        return value && !/[<>;{}]/.test(value) ? name + ':' + value : '';
-      }).filter(Boolean).join(';');
-      setFrameTheme(':root{' + declarations + '}');
-    };
+    const sync = () => setFrameTheme(readReportTheme());
     sync();
     const observer = new MutationObserver(sync);
     observer.observe(document.documentElement, { attributes: true });
@@ -326,8 +422,6 @@ function Viewer({ store }) {
   }, [v]);
   useEffect(() => {
     if (!v) return undefined;
-    setLoaded(false);
-    setFrameError(false);
     const previous = v.origin?.element?.isConnected ? v.origin.element : document.activeElement;
     const root = panel.current;
     const siblings = [...document.body.children].filter((el) => !el.contains(root));
@@ -351,9 +445,11 @@ function Viewer({ store }) {
     };
   }, [v, store]);
   if (!v) return null;
-  // CSP also prevents remote resources and refresh navigation in imported HTML.
-  const safeHtml = '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:; font-src data:; base-uri \'none\'; form-action \'none\'"></head><body>' + v.html.replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh\b[^>]*>/gi, '') + '<style>' + frameTheme + '</style></body></html>';
-  return ReactDOM.createPortal(h('div', { className: 'ddr-root ddr-viewer', role: 'dialog', 'aria-modal': true, 'aria-label': v.title },
+  // Only our nonce-authorized click bridge may run; imported scripts stay blocked.
+  const interactive = !!v.sessionIds?.length;
+  const safeHtml = reportFrameHtml(v.html, frameTheme, bridgeToken, interactive);
+  const frameKey = String(v.id ?? v.key ?? '') + '\n' + safeHtml;
+  return ReactDOM.createPortal(h('div', { key: v.id ?? v.html, className: 'ddr-root ddr-viewer', role: 'dialog', 'aria-modal': true, 'aria-label': v.title },
     h('div', { className: 'ddr-viewer-mask', ref: mask, onClick: requestClose, 'aria-hidden': true }),
     h('div', { className: 'ddr-viewer-panel', ref: panel, tabIndex: -1 },
       h('div', { className: 'ddr-viewer-content', ref: content },
@@ -363,9 +459,9 @@ function Viewer({ store }) {
         v.key ? h('button', { type: 'button', className: 'ddr-btn', onClick: () => store.open(v.kind, v.key) }, '在浏览器打开') : null,
         h('button', { type: 'button', className: 'ddr-x', 'data-viewer-close': true, 'aria-label': '关闭报告', onClick: requestClose }, h(IconClose))),
       snap.error ? h('p', { className: 'ddr-note ddr-err ddr-viewer-status', role: 'alert' }, snap.error) : null,
-      frameError ? h('p', { className: 'ddr-note ddr-err ddr-viewer-status', role: 'alert' }, '报告视图载入失败，可关闭后重试，或使用上方按钮打开报告。') : null,
-      !loaded && !frameError ? h('p', { className: 'ddr-note ddr-viewer-status', role: 'status' }, '正在载入报告…') : null,
-      h('iframe', { key: v.html, title: v.title, sandbox: '', referrerPolicy: 'no-referrer', srcDoc: safeHtml, onLoad: () => setLoaded(true), onError: () => setFrameError(true) })))), document.body);
+      frameError === frameKey ? h('p', { className: 'ddr-note ddr-err ddr-viewer-status', role: 'alert' }, '报告视图载入失败，可关闭后重试，或使用上方按钮打开报告。') : null,
+      loaded !== frameKey && frameError !== frameKey ? h('p', { className: 'ddr-note ddr-viewer-status', role: 'status' }, '正在载入报告…') : null,
+      h('iframe', { key: frameKey, title: v.title, ref: frame, sandbox: interactive ? 'allow-scripts' : '', referrerPolicy: 'no-referrer', srcDoc: safeHtml, onLoad: () => setLoaded(frameKey), onError: () => setFrameError(frameKey) })))), document.body);
 }
 
 /* ---------------------------------------------------------------- settings */
@@ -565,9 +661,9 @@ function SettingsSection({ store }) {
       h('p', null, 'Markdown 可直接让 agent 读取回答「上周三我做了什么」。' + (st.dataBytes ? '插件数据及归档共 ' + fmtBytes(st.dataBytes) + '。' : '')),
       h('div', { className: 'ddr-row', style: { borderBottom: 0 } },
         h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
-          h('button', { type: 'button', className: 'ddr-btn primary', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('daily').then((v) => store.showHtml('DSH 每日简报 · ' + v.card.label, v.html, 'daily', v.key, origin)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'daily' ? '生成中…' : '生成日报'),
-          h('button', { type: 'button', className: 'ddr-btn', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('weekly', { current: true }).then((v) => store.showHtml('DSH 周报 · ' + v.label, v.html, 'weekly', v.key, origin)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'weekly' ? '生成中…' : '本周周报'),
-          h('button', { type: 'button', className: 'ddr-btn', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('monthly', { current: true }).then((v) => store.showHtml('DSH 月报 · ' + v.label, v.html, 'monthly', v.key, origin)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'monthly' ? '生成中…' : '本月月报')),
+          h('button', { type: 'button', className: 'ddr-btn primary', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('daily').then((v) => store.showHtml('DSH 每日简报 · ' + v.card.label, v.html, 'daily', v.key, origin, v.sessionIds)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'daily' ? '生成中…' : '生成日报'),
+          h('button', { type: 'button', className: 'ddr-btn', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('weekly', { current: true }).then((v) => store.showHtml('DSH 周报 · ' + v.label, v.html, 'weekly', v.key, origin, v.sessionIds)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'weekly' ? '生成中…' : '本周周报'),
+          h('button', { type: 'button', className: 'ddr-btn', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('monthly', { current: true }).then((v) => store.showHtml('DSH 月报 · ' + v.label, v.html, 'monthly', v.key, origin, v.sessionIds)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'monthly' ? '生成中…' : '本月月报')),
         genMsg ? h('span', { className: 'ddr-note ddr-err' }, genMsg) : null),
       h('div', { className: 'ddr-tabs' }, h(Seg, { label: '报告类型', value: tab, onChange: setTab, options: [{ value: 'daily', label: '日报' }, { value: 'weekly', label: '周报' }, { value: 'monthly', label: '月报' }] })),
       h('div', { className: 'ddr-reports' },
@@ -599,16 +695,21 @@ return {
       document.head.appendChild(tag);
       ctx.effect(() => () => tag.remove());
     }
-    const store = makeStore(connection);
+    const store = makeStore(connection, (sessionId) => {
+      const workspace = ctx.get('uiWorkspace');
+      if (!workspace || typeof workspace.openSession !== 'function') throw new Error('当前 DSH 不支持会话跳转，请更新后再试');
+      return workspace.openSession(sessionId);
+    });
     store.start();
     ctx.effect(() => () => store.dispose());
 
     function BrandMark({ size, className }) {
       const snap = useSyncExternalStore(store.subscribe, store.get);
       const [hovering, setHovering] = useState(false);
+      const [reducedMotion, setReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
       useEffect(() => {
         const media = window.matchMedia('(prefers-reduced-motion: reduce)');
-        const stop = () => { if (media.matches) setHovering(false); };
+        const stop = () => { setReducedMotion(media.matches); if (media.matches) setHovering(false); };
         stop(); media.addEventListener('change', stop);
         return () => media.removeEventListener('change', stop);
       }, []);
@@ -624,9 +725,10 @@ return {
           onPointerLeave: () => setHovering(false),
           onClick: () => (snap.cardOpen ? store.closeCard(false) : (store.openCard(), store.refresh())),
         },
-        h(HeroFishSvg, { size: size || 34, className, hovering }),
+        h(HeroFishSvg, { size: size || 34, className, hovering: !reducedMotion && (hovering || (unseen && !snap.cardOpen)) }),
         unseen && !snap.cardOpen ? h('span', { className: 'ddr-dot', 'aria-hidden': true }) : null),
-        snap.cardOpen ? h(MorningCard, { store, anchorRef: anchor, onClose: (dismiss) => store.closeCard(dismiss || (hasCard && unseen)) }) : null);
+        snap.cardOpen ? h(MorningCardBoundary, { onClose: () => store.closeCard(false) },
+          h(MorningCard, { store, anchorRef: anchor, onClose: (dismiss) => store.closeCard(dismiss || (hasCard && unseen)) })) : null);
     }
 
     slots.inject('conversation.hero.brand.mark', () => slots.register({ name: 'conversation.hero.brand.mark' }, BrandMark));

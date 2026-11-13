@@ -42,16 +42,16 @@ test('empty report omits every section, optional row and alert chip', () => {
   assert.match(html, /<details class="appendix"><summary>附录/)
 })
 
-test('daily HTML escapes all report-controlled content and opens only mainline/carryOver', () => {
+test('daily HTML escapes report content, hides legacy mainline and opens only carryOver', () => {
   const report = structuredClone(sampleDaily)
   report.layer1.oneLiner = '<script>alert("x")</script>'
   report.sections.mainline[0].title = '<img src="https://evil.invalid/x">'
   const html = renderHtml(report)
   assert.doesNotMatch(html, /<script|<img/i)
   assert.match(html, /&lt;script&gt;/)
-  assert.match(html, /class="sec" open><summary>今日主线/)
+  assert.doesNotMatch(html, /今日主线|&lt;img/)
   assert.match(html, /class="sec" open><summary>明日待续/)
-  assert.ok(html.indexOf('<summary>明日待续') < html.indexOf('<summary>今日主线'), 'carry-over section must be the first section')
+  assert.ok(html.indexOf('<summary>明日待续') < html.indexOf('<summary>用量与成本'), 'carry-over section must be the first section')
   assert.match(html, /class="sec"><summary>用量与成本/)
   assert.match(html, /▲ \+23%/)
   assert.match(html, /▼ -12%/)
@@ -82,7 +82,8 @@ test('weekly and monthly render nullable statistics and period chart correctly',
 
 test('Markdown has all three layers, escaped table cells and JSON appendix', () => {
   const md = renderMarkdown(sampleDaily)
-  for (const name of ['今日主线', '用量与成本', '工具与产出', '卡点', '作息与健康', '明日待续', '附录']) assert.ok(md.includes('## ' + name), name)
+  assert.doesNotMatch(md, /## 今日主线/)
+  for (const name of ['用量与成本', '工具与产出', '卡点', '作息与健康', '明日待续', '附录']) assert.ok(md.includes('## ' + name), name)
   assert.match(md, /^# DSH 每日简报 · /)
   assert.match(md, /^> /m)
   assert.match(md, /\| 指标 \| 用量 \| 变化 \|/)
@@ -104,6 +105,27 @@ test('raw JSON fencing cannot be closed by untrusted report strings', () => {
   r.appendix.raw.note = '```json malicious'
   assert.match(renderMarkdown(r), /````json/)
 })
+
+test('discovery follows the overview only when present; session controls are DSH-viewer-only', () => {
+  const r = structuredClone(sampleDaily);
+  r.layer1.discovery = '发现 <script>重复手工校验</script> 可以合并';
+  r.sections.carryOver = [{ kind: 'todo', text: '继续验收', title: '来源 <title>', sessionId: 'source-1" onclick="bad()' }, { kind: 'todo', text: '旧待办无 ID' }];
+  const html = renderHtml(r, { sessionLinks: true });
+  assert.ok(html.indexOf('</header>') < html.indexOf('<aside class="discovery"'));
+  assert.ok(html.indexOf('<aside class="discovery"') < html.indexOf('<summary>明日待续'));
+  assert.match(html, /发现 &lt;script&gt;/); assert.doesNotMatch(html, /<script/);
+  assert.equal((html.match(/<button type="button" class="session-link"/g) || []).length, 1);
+  assert.match(html, /source-1&quot; onclick=&quot;bad\(\)/);
+  assert.doesNotMatch(renderHtml(r), /<button/);
+  assert.doesNotMatch(renderHtml(r, { sessionLinks: true, redact: true }), /<button/);
+  assert.match(renderMarkdown(r), /## 每日意外发现/);
+  assert.match(renderMarkdown(r), /会话 ID：source-1/);
+  for (const discovery of [null, undefined, '', '  ']) {
+    r.layer1.discovery = discovery;
+    assert.doesNotMatch(renderHtml(r), /<aside class="discovery"/);
+    assert.doesNotMatch(renderMarkdown(r), /## 每日意外发现/);
+  }
+});
 
 test('write daily and weekly standalone HTML previews', async () => {
   const out = new URL('./out/', import.meta.url)
