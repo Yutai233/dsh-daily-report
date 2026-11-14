@@ -260,43 +260,48 @@ console.log('[4] weather: fetchWeather / geocode（注入假 fetch）')
 }
 
 // ---------------------------------------------------------------------------
-console.log('[5] cost: costOf / isOffpeak（含跨午夜）')
+console.log('[5] cost: costOf / isOffpeak（工作日峰时 + 周末/节假日谷时 + Pro 三倍）')
 {
-  const peak = at(2026, 11, 12, 12, 0)
-  const offpeak = at(2026, 11, 12, 3, 0)
+  const weekday = (h, mi) => at(2026, 11, 12, h, mi) // 周四
+  const peak = weekday(10, 0)
+  const offpeak = weekday(3, 0)
 
-  assertEq(costOf({ inputTokens: 1000000 }, DEFAULT_PRICING), 2, 'input 1M 峰时 = ¥2')
+  assertEq(costOf({ inputTokens: 1000000 }, DEFAULT_PRICING), 2, '未命中输入 1M 峰时 = ¥2')
   assertEq(costOf({ inputTokens: 1000000 }, DEFAULT_PRICING, peak), 2, '峰时无折扣')
   assertEq(costOf({ inputTokens: 1000000 }, DEFAULT_PRICING, offpeak), 1, '谷时五折')
   assertEq(
     costOf({ inputTokens: 1000000, outputTokens: 1000000, cacheReadTokens: 1000000, cacheWriteTokens: 1000000 }, DEFAULT_PRICING, peak),
-    7.2,
-    '四类 token 合计 = 7.2',
+    10.04,
+    '三类 token 峰时合计 = 2 + 8 + 0.04（缓存写不单独计价）',
   )
+  assertEq(costOf({ outputTokens: 1000000 }, DEFAULT_PRICING, peak), 8, '输出 1M 峰时 = ¥8')
+  assertEq(costOf({ cacheReadTokens: 1000000 }, DEFAULT_PRICING, offpeak), 0.02, '缓存命中 1M 谷时 = ¥0.02')
   assertEq(costOf({}, DEFAULT_PRICING), 0, '空 usage = 0')
   assertEq(costOf(null, DEFAULT_PRICING), 0, 'null usage = 0')
-  assertEq(costOf({ inputTokens: 1000000 }, DEFAULT_PRICING, at(2026, 11, 12, 8, 30)), 2, '08:30 为谷时右边界（不含）')
+  assertEq(costOf({ outputTokens: 1000000 }, DEFAULT_PRICING, peak, 'deepseek-v4-pro'), 24, 'Pro 输出 1M 峰时 = 8 × 3')
+  assertEq(costOf({ outputTokens: 1000000 }, DEFAULT_PRICING, offpeak, 'deepseek-v4-pro'), 12, 'Pro 输出 1M 谷时 = 4 × 3')
+  assertEq(costOf({ outputTokens: 1000000 }, DEFAULT_PRICING, peak, 'deepseek-v4-flash'), 8, 'Flash 不放大')
+  assertEq(costOf({ outputTokens: 1000000 }, DEFAULT_PRICING, peak, 'custom-model'), 8, '未知模型按 Flash')
 
-  const t = (h, mi) => at(2026, 11, 12, h, mi)
+  // 峰时边界：09:00–12:00、14:00–18:00（不含右端点）
   const checks = [
-    [t(0, 0), false], [t(0, 29), false], [t(0, 30), true],
-    [t(1, 0), true], [t(7, 59), true], [t(8, 29), true], [t(8, 30), false], [t(12, 0), false],
+    [weekday(8, 59), true], [weekday(9, 0), false], [weekday(11, 59), false],
+    [weekday(12, 0), true], [weekday(13, 59), true], [weekday(14, 0), false],
+    [weekday(17, 59), false], [weekday(18, 0), true], [weekday(23, 30), true],
   ]
   for (const [ms, expected] of checks) {
     assertEq(isOffpeak(ms), expected, 'isOffpeak(' + new Date(ms).toTimeString().slice(0, 5) + ') = ' + expected)
   }
   assertEq(isOffpeak(undefined), false, 'isOffpeak(undefined) = false')
-  assertEq(isOffpeak(t(2, 0), { ...DEFAULT_PRICING, offpeak: { start: '25:00', end: '08:30' } }), false, '非法时刻 = false')
 
-  // 跨午夜 22:00–06:00
-  const cross = { ...DEFAULT_PRICING, offpeak: { start: '22:00', end: '06:00' } }
-  const crossChecks = [
-    [t(21, 59), false], [t(22, 0), true], [t(23, 59), true], [t(0, 0), true], [t(5, 59), true], [t(6, 0), false], [t(12, 0), false],
-  ]
-  for (const [ms, expected] of crossChecks) {
-    assertEq(isOffpeak(ms, cross), expected, '跨午夜 isOffpeak(' + new Date(ms).toTimeString().slice(0, 5) + ') = ' + expected)
-  }
-  assertEq(costOf({ outputTokens: 1000000 }, cross, t(23, 0)), 1.5, '跨午夜谷时：output 1M × 3 × 0.5')
+  // 周末（11/14 周六、11/15 周日）与法定节假日（10/5 周一 国庆、1/1 元旦）全天谷价
+  assertEq(isOffpeak(at(2026, 11, 14, 10, 0)), true, '周六 10:00 为谷时')
+  assertEq(isOffpeak(at(2026, 11, 15, 15, 0)), true, '周日 15:00 为谷时')
+  assertEq(isOffpeak(at(2026, 10, 5, 10, 0)), true, '国庆假期 10:00 为谷时')
+  assertEq(isOffpeak(at(2026, 1, 1, 10, 0)), true, '元旦 10:00 为谷时')
+  assertEq(costOf({ outputTokens: 1000000 }, DEFAULT_PRICING, at(2026, 11, 14, 10, 0)), 4, '周六输出 1M = ¥4')
+  // 2026-11-13 周五仍按工作日
+  assertEq(isOffpeak(at(2026, 11, 13, 10, 0)), false, '周五 10:00 为峰时')
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +330,7 @@ console.log('[6] cost: analyzeCost')
   assertEq(cost.offpeakSavingCny, 0.4, 'offpeakSaving = 0.8 × 0.5')
   assertEq(cost.priciest, { sessionId: 's1', title: '日报插件设计', turn: 1, costCny: 0.5 }, 'priciest 按 session+turn 聚合')
   assertEq(cost.tips, [
-    '80% 用量在高峰期，挪到谷时（00:30–08:30）约省 ¥0.40',
+    '80% 用量在峰时（工作日 09:00–12:00、14:00–18:00），其余时间（含周末与法定节假日）按 50% 计，挪过去约省 ¥0.40',
     '缓存命中率仅 10%，长会话尽量复用同一会话可降低成本',
   ], 'tips 两条中文建议')
 

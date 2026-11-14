@@ -10,9 +10,11 @@ const read = async (name) => (await readFile(new URL(name, dir), 'utf8')).replac
 const source = await read('client-source.js')
 const css = await read('ui.css')
 const fish = await read('fish-paths.js')
+const pkg = JSON.parse(await read('../package.json'))
 const artifact =
   "window.__ModuleLoader__.load({\n id: 'dsh-daily-report',\n factory(require) {\n" +
   ' const CSS_TEXT = ' + JSON.stringify(css) + ';\n' +
+  ' const __DDR_VERSION__ = ' + JSON.stringify(pkg.version) + ';\n' +
   fish + '\n' +
   source + '\n }\n});\n'
 new Script(artifact, { filename: 'client.js' }) // syntax check

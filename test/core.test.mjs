@@ -118,7 +118,7 @@ test('summaries: local-only never calls a model; cloud uses llm.stream and cache
   let f = await collectDay(src, D)
   let calls = 0
   const llm = { async *stream(opts) { calls++; assert.equal(opts.provider, 'p'); yield { type: 'text-delta', text: '修复了 index.js 的空指针；测试仍有 1 个失败。' } } }
-  const b = await summarizeDay(f, normalizeConfig({}), { llm })
+  const b = await summarizeDay(f, normalizeConfig({ privacy: 'local-only' }), { llm })
   assert.equal(b.llmCalls, 0)
   assert.equal(calls, 0)
   assert.equal(f.sessions[0].summarySource, 'template')
@@ -166,7 +166,7 @@ test('generationMeta turns genUsage into tokens plus a priced cost', async () =>
   assert.equal(meta.calls, 2)
   assert.equal(meta.tokens, 1500)
   assert.equal(meta.estimated, false)
-  assert.ok(meta.costCny > 0 && meta.costCny <= 0.0035, '峰时 2/3 元每百万：' + meta.costCny)
+  assert.ok(meta.costCny > 0 && meta.costCny <= 0.0065, '峰时 2/8 元每百万、谷时五折：' + meta.costCny)
   assert.deepEqual(generationMeta(null, {}), { calls: 0, tokens: 0, inputTokens: 0, outputTokens: 0, costCny: 0, estimated: false })
 })
 
@@ -180,7 +180,7 @@ test('local-model mode refuses non-loopback hosts and never falls back to cloud'
   assert.equal(url, 'http://127.0.0.1:11434/v1/chat/completions')
 })
 
-test('report: festival 只在节日当天写入 layer1，可在设置里关掉', async () => {
+test('report: festival 只在节日当天写入 layer1，始终开启', async () => {
   const src = { list: async () => [{ id: 's1', createdAt: start, cwd: 'E:\\proj' }], read: async () => events(), titles: async () => ({}) }
   const f = await collectDay(src, D)
   await summarizeDay(f, normalizeConfig({}), {})
@@ -190,7 +190,6 @@ test('report: festival 只在节日当天写入 layer1，可在设置里关掉',
   assert.equal(r.layer1.festival.id, 'xmas')
   assert.equal(r.layer1.festival.badge, '🎄 圣诞')
   assert.match(r.layer1.festival.greeting, /^.{1,10}$/u)
-  assert.equal(buildDailyReport(xmas, [], normalizeConfig({ festival: false })).layer1.festival, null, '关掉开关后不出现')
   assert.equal(buildDailyReport({ ...f, date: '2026-11-13' }, [], normalizeConfig({})).layer1.festival, null)
 })
 
@@ -217,11 +216,14 @@ test('report: only-what-changed sections and 7-day deltas', async () => {
 })
 
 test('config defaults encode the three decisions as user settings', () => {
-  assert.equal(DEFAULTS.privacy, 'local-only')
-  assert.equal(DEFAULTS.inputSampling, false)
+  assert.equal(DEFAULTS.privacy, 'cloud', 'cloud summaries are the default (user asked for it)')
+  assert.equal(DEFAULTS.inputSampling, true, 'keyboard/mouse sampling is on by default')
   assert.equal(DEFAULTS.delivery, 'both')
-  const c = normalizeConfig({ privacy: 'cloud', inputSampling: true, delivery: 'fixed', deliveryTime: '7:05' })
+  assert.deepEqual(DEFAULTS.links, { context: true, bili: true }, 'plugin links are opted in by default')
+  const c = normalizeConfig({ privacy: 'local-only', inputSampling: false, delivery: 'fixed', deliveryTime: '7:05' })
   assert.equal(c.deliveryTime, '07:05')
+  assert.deepEqual(normalizeConfig({ links: { bili: false } }).links, { context: true, bili: false })
+  assert.deepEqual(normalizeConfig({ links: { context: 'yes' } }).links, { context: true, bili: true }, 'non-booleans keep the base value')
   assert.equal(normalizeConfig({ deliveryTime: '25:00' }).deliveryTime, '09:00')
 })
 

@@ -103,14 +103,18 @@ test('host entry: RPC round trip, generation, dispose', { timeout: 240000 }, asy
 
   let s = await rpc(routes, 'state', { withSize: true })
   assert.equal(s.ok, true)
-  assert.equal(s.value.config.privacy, 'local-only', 'privacy defaults to B (local-only)')
-  assert.equal(s.value.config.inputSampling, false, 'input sampling is opt-in')
+  assert.equal(s.value.config.privacy, 'cloud', 'privacy defaults to A (cloud summaries)')
+  assert.equal(s.value.config.inputSampling, true, 'input sampling is on by default')
   assert.equal(s.value.config.delivery, 'both')
+  assert.deepEqual(s.value.config.links, { context: true, bili: true }, 'plugin links default on')
+  assert.equal(typeof s.value.links.context, 'boolean', 'state reports live detection, not consent')
 
   const c = await rpc(routes, 'config', { delivery: 'first-open', privacy: 'bogus', health: { sitLimitMin: 5 } })
   assert.equal(c.value.config.delivery, 'first-open')
-  assert.equal(c.value.config.privacy, 'local-only', 'invalid enum ignored')
+  assert.equal(c.value.config.privacy, 'cloud', 'invalid enum ignored')
   assert.equal(c.value.config.health.sitLimitMin, 20, 'clamped')
+  // The rest of this test pins local-only behaviour, so switch back explicitly.
+  await rpc(routes, 'config', { privacy: 'local-only' })
 
   const g = await rpc(routes, 'generate', { kind: 'daily', date: '2026-11-10' })
   assert.equal(g.ok, true, JSON.stringify(g.error))

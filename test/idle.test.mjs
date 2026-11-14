@@ -10,7 +10,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { createIdleSampler, readIdleDay } from '../lib/collect/idle.js'
+import { createIdleSampler, readIdleDay, readIdleStreak } from '../lib/collect/idle.js'
 import { dayRange, fmtDate, readLines } from '../lib/util.js'
 
 const MIN = 60000
@@ -56,6 +56,9 @@ test('readIdleDay：连续段、打断、断档与久坐统计', async () => {
     const tail = base + 90 * MIN + 4 * HOUR
     for (let i = 0; i < 3; i += 1) rows.push({ t: tail + i * MIN, idleMs: 500 })
 
+    // 最后一次采样时人已离开 30 分钟：lastSample 走得更晚，但不算“在用”。
+    rows.push({ t: tail + 3 * MIN, idleMs: 30 * MIN })
+
     await writeSamples(dataDir, dateStr, rows)
 
     const idle = await readIdleDay(dataDir, dateStr)
@@ -70,6 +73,7 @@ test('readIdleDay：连续段、打断、断档与久坐统计', async () => {
     )
     assert.equal(idle.firstActive, base)
     assert.equal(idle.lastActive, tail + 2 * MIN)
+    assert.equal(idle.lastSample, tail + 3 * MIN, 'lastSample 取当天最后一个采样时刻')
     assert.equal(idle.activeMs, 93 * MIN, '93 个在用采样 × 60s')
     assert.ok(idle.streaks[0].ms >= idle.streaks[1].ms, 'streaks 按 ms 降序')
   } finally {
@@ -82,6 +86,47 @@ test('readIdleDay：当天没有采样文件时返回 null', async () => {
   try {
     const result = await readIdleDay(dataDir, fmtDate(Date.now()))
     assert.equal(result, null)
+  } finally {
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('readIdleStreak：只认此刻仍开着的最后一段', async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'dsh-idle-streak-'))
+  try {
+    const dateStr = '2026-05-06' // 固定日期，避免恰好跨零点
+    const base = dayRange(dateStr).start + 9 * HOUR
+    /** @type {Array<{ t: number, idleMs: number }>} */
+    const rows = []
+    for (let i = 0; i < 60; i += 1) rows.push({ t: base + i * MIN, idleMs: 500 })
+    await writeSamples(dataDir, dateStr, rows)
+
+    // 尾采样在 30 秒前 → 仍在用；end 取 now，ms 随真实时间推进。
+    const now = base + 59 * MIN + 30000
+    const open = await readIdleStreak(dataDir, dateStr, { now })
+    assert.ok(open, '尾采样新鲜时应返回连续段')
+    assert.equal(open.start, base - MIN, 'start = 第一个在用采样 - 一个采样间隔')
+    assert.equal(open.end, now)
+    assert.equal(open.ms, now - open.start)
+
+    // 距尾采样超过 3 个采样间隔 → 认为人已离开。
+    assert.equal(await readIdleStreak(dataDir, dateStr, { now: base + 59 * MIN + 4 * MIN }), null)
+    // 时钟回拨（now 早于尾采样）不算在用。
+    assert.equal(await readIdleStreak(dataDir, dateStr, { now: base - 10 * MIN }), null)
+
+    // 尾采样空闲 5 分钟 → 已休息，没有仍开着的段。
+    await writeSamples(dataDir, dateStr, rows.concat([{ t: base + 60 * MIN, idleMs: 5 * MIN }]))
+    assert.equal(await readIdleStreak(dataDir, dateStr, { now: base + 60 * MIN + 30000 }), null)
+
+    // 只有 3 分钟碎片段（低于 10 分钟下限）→ 不返回。
+    const shortDir = await mkdtemp(path.join(tmpdir(), 'dsh-idle-short-'))
+    try {
+      const shortRows = [0, 1, 2].map((i) => ({ t: base + i * MIN, idleMs: 500 }))
+      await writeSamples(shortDir, dateStr, shortRows)
+      assert.equal(await readIdleStreak(shortDir, dateStr, { now: base + 2 * MIN + 30000 }), null)
+    } finally {
+      await rm(shortDir, { recursive: true, force: true })
+    }
   } finally {
     await rm(dataDir, { recursive: true, force: true })
   }

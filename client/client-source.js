@@ -3,6 +3,8 @@ const ReactDOM = require('react-dom');
 const P = require('@deepseek-ai/dsh-client-ui-primitives');
 const h = React.createElement;
 const { useState, useEffect, useRef, useCallback, useSyncExternalStore, useLayoutEffect } = React;
+// Injected by client/build.mjs from package.json; fallback keeps direct-source tests working.
+const PLUGIN_VERSION = typeof __DDR_VERSION__ !== 'undefined' ? __DDR_VERSION__ : '0.3.4';
 
 /* ---------------------------------------------------------------- store */
 
@@ -119,6 +121,25 @@ const festStyle = (f) => {
 };
 const fmtClock = (ms) => { const d = new Date(ms); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
 const fmtBytes = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n > 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
+
+/** Compact Chinese token units; the backend's net figure already deducts compression cost. */
+function formatBiliTokens(n) {
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n > 0 && n < 1) return '<1';
+  // Promote rounded boundary values rather than displaying "10000万".
+  if (n >= 99995000) return (n / 1e8).toFixed(1).replace(/\.0$/, '') + '亿';
+  if (n >= 9999.5) return (n / 1e4).toFixed(1).replace(/\.0$/, '') + '万';
+  return String(Math.round(n));
+}
+
+/** Hidden pages do not spend animation frames; unmount always removes the listener. */
+function bindTokenCubeVisibility(node) {
+  if (!node) return;
+  const sync = () => { node.dataset.hidden = document.hidden ? 'true' : 'false'; };
+  sync();
+  document.addEventListener('visibilitychange', sync);
+  return () => document.removeEventListener('visibilitychange', sync);
+}
 
 /** Capture before any RPC await; DOMRects themselves must not be kept live. */
 function captureViewerOrigin(trigger) {
@@ -269,6 +290,7 @@ function MorningCard({ store, anchorRef, onClose }) {
   const snap = useSyncExternalStore(store.subscribe, store.get);
   const ref = useRef(null);
   const carryRef = useRef(null);
+  const tokenCubeRef = useRef(null);
   const place = useCallback(() => {
     const a = anchorRef.current; const c = ref.current;
     if (!a || !c || !a.isConnected || !c.isConnected) return;
@@ -340,15 +362,39 @@ function MorningCard({ store, anchorRef, onClose }) {
   const st = snap.state;
   const card = st && st.card;
   const l1 = card && card.layer1;
-  // 天气并入日期行：weather.text 自带「天气 MM-DD · 」前缀，而日期已由 card.label 给出，这里剥掉前缀；
-  // 只有天气日期与报告日期不是同一天（回退展示）时才补回天气日期，否则会丢掉"这份天气属于哪天"。
+  // 天气并入日期行：weather.text 自带「天气 MM-DD · 」前缀，日期由标题行统一给出，直接剥掉。
+  // 文案形如「明日 南京 · 🌧 13~18°C 阵雨 · 记得带伞」：先说这是哪天的天气，再给具体数据。
   const wx = (card && l1 && l1.weather) || null;
   const wxBody = wx ? String(wx.text || '').replace(/^天气\s*\d{2}-\d{2}\s*·\s*/, '').trim() : '';
-  const wxDate = wx && wx.date && card && wx.date !== card.key ? (wx.label || '天气 ' + String(wx.date).slice(5)) : '';
-  const wxInline = wx && (wxBody || wx.tip)
-    ? h('span', { className: 'ddr-wx' }, ' · ', wxDate ? wxDate + ' · ' : null, wxBody || null, wx.tip ? h('span', { className: 'ddr-tip' }, ' · ' + wx.tip) : null)
+  // 地点：新报告带 location 字段；旧报告没有，就从 text 末尾的「 · 南京」反推（排除温度片段）。
+  const wxPlaceRaw = wx ? (wx.location || '') : '';
+  const wxTail = wxBody.lastIndexOf(' · ') > 0 ? wxBody.slice(wxBody.lastIndexOf(' · ') + 3).trim() : '';
+  const wxPlace = wxPlaceRaw || (wxTail && !/[°℃]/.test(wxTail) && !/\d/.test(wxTail) ? wxTail : '');
+  const wxPlaceSep = wxPlace ? wxBody.lastIndexOf(' · ' + wxPlace) : -1;
+  const wxDataRaw = wxPlaceSep > 0 ? wxBody.slice(0, wxPlaceSep).trim() : wxBody;
+  // 天气日期按报告日说成「今日/明日/昨日」，比重复写 MM-DD 更清楚；相差两天以上才退回具体日期。
+  const wxWhen = (() => {
+    if (!wx || !wx.date || !card || !card.key) return '';
+    const from = Date.parse(String(card.key) + 'T00:00:00');
+    const to = Date.parse(String(wx.date) + 'T00:00:00');
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return '';
+    const diff = Math.round((to - from) / 86400000);
+    const word = diff === 0 ? '今日' : diff === 1 ? '明日' : diff === -1 ? '昨日'
+      : (+String(wx.date).slice(5, 7)) + '月' + (+String(wx.date).slice(8, 10)) + '日';
+    return wxPlace ? word + ' ' + wxPlace : word;
+  })();
+  const wxData = wxWhen ? wxDataRaw : wxBody;
+  const wxInline = wx && (wxWhen || wxData || wx.tip)
+    ? h(React.Fragment, null,
+      ' · ',
+      h('span', { className: 'ddr-wx' },
+        wxWhen || null,
+        wxWhen && (wxData || wx.tip) ? ' · ' : null,
+        wxData || null,
+        (wxWhen || wxData) && wx.tip ? ' · ' : null,
+        wx.tip ? h('span', { className: 'ddr-tip' }, wx.tip) : null))
     : null;
-  // 用量只保留 tokens 与花费，放到告警胶囊右侧；涨跌幅用完整报告同款的 ▲/▼ 标记。
+  // 用量只留 tokens 与涨跌幅，和告警胶囊并排；花费挪进 title，免得把这一行撑到第二行。
   // layer1.usage 是新报告的结构化字段，旧报告退回 sections.usage.rows（无差值，避免语义错位）。
   const l1Usage = (l1 && l1.usage) || null;
   const usageRows = (card && card.usage && card.usage.rows) || null;
@@ -356,12 +402,28 @@ function MorningCard({ store, anchorRef, onClose }) {
   const costText = l1Usage ? l1Usage.cost : usageRows && usageRows[1] ? usageRows[1].value : '';
   const tokTrend = l1Usage ? l1Usage.trend : null;
   const tokDelta = l1Usage ? l1Usage.delta : null;
-  const usageNode = tokText
-    ? h('span', { className: 'ddr-usage', title: '这一天用掉的 token 与估算花费' },
-      h('b', null, tokText + ' tokens'),
-      tokTrend && tokDelta ? h('span', { className: 'ddr-delta ' + tokTrend, title: '与前一天相比' }, (tokTrend === 'up' ? '▲' : tokTrend === 'down' ? '▼' : '—') + ' ' + tokDelta) : null,
-      costText ? h('span', { className: 'ddr-usage-cost' }, '（约 ' + costText + '）') : null)
-    : null;
+  const bili = l1 && l1.bili;
+  const netSaved = bili && bili.netSavedTokens;
+  const showBili = Number.isFinite(netSaved) && netSaved > 0;
+  const netApprox = bili && bili.estimated === true ? '约' : '';
+  const savingText = showBili ? 'bili-c节省' + netApprox + formatBiliTokens(netSaved) : '';
+  const netBasis = netApprox ? '（bili 账本净收益估算，已扣除压缩及摘要开销；非账单实测/非窗口回收量）' : '（已扣除压缩及摘要开销）';
+  const biliTitle = showBili ? 'bili-c净节省' + netApprox + ' ' + formatBiliTokens(netSaved) + ' tokens' + netBasis
+    : Number.isFinite(netSaved) && netSaved < 0 ? 'bili-c净增加' + netApprox + ' ' + formatBiliTokens(-netSaved) + ' tokens（压缩及摘要开销超过节省）'
+    : Number.isFinite(netSaved) && netSaved === 0 ? 'bili-c净节省' + netApprox + ' 0 tokens'
+    : bili ? 'bili-c净节省暂不可用' : '';
+  const usageTitle = '这一天用掉的 token' + (costText ? '，估算花费约 ' + costText : '');
+  const deltaText = tokTrend && tokDelta ? (tokTrend === 'up' ? '▲' : tokTrend === 'down' ? '▼' : '—') + ' ' + tokDelta : '';
+  const usageContents = [h('b', { key: 'tokens' }, tokText + ' tokens'),
+    deltaText ? h('span', { key: 'delta', className: 'ddr-delta ' + tokTrend, title: '与前一天相比' }, deltaText) : null];
+  const usageFace = h('span', { className: 'ddr-usage' }, ...usageContents);
+  useEffect(() => tokText && showBili ? bindTokenCubeVisibility(tokenCubeRef.current) : undefined, [!!tokText, showBili]);
+  const usageNode = !tokText ? null : showBili
+    ? h('span', { className: 'dr-token-cube', ref: tokenCubeRef, title: usageTitle + '；' + biliTitle, role: 'group', 'aria-label': tokText + ' tokens' + (deltaText ? '，与前一天相比 ' + deltaText : '') + '；' + biliTitle, 'data-paused': snap.viewer || snap.busy ? 'true' : 'false' },
+      h('span', { className: 'dr-token-cube__rotor', 'aria-hidden': true },
+        h('span', { className: 'dr-token-cube__face dr-token-cube__face--usage' }, usageFace),
+        h('span', { className: 'dr-token-cube__face dr-token-cube__face--bili' }, savingText)))
+    : h('span', { className: 'ddr-usage', title: usageTitle + (biliTitle ? '；' + biliTitle : '') }, ...usageContents);
   const alertItems = (l1 && l1.alerts) || [];
   let body;
   if (!st) {
@@ -378,7 +440,9 @@ function MorningCard({ store, anchorRef, onClose }) {
       alertItems.length || usageNode ? h('div', { className: 'ddr-alerts' },
         alertItems.map((a, i) => h('span', { key: i, className: 'ddr-alert' }, '⚠ ' + a)),
         usageNode) : null,
-      typeof l1.discovery === 'string' && l1.discovery.trim() ? h('aside', { className: 'ddr-discovery', 'aria-label': '每日发现' }, h('b', null, '每日发现：'), l1.discovery) : null,
+      typeof l1.discovery === 'string' && l1.discovery.trim() && (l1.discoveryLinked !== true || l1.bili)
+        ? h('aside', { className: 'ddr-discovery', 'aria-label': '每日发现' }, h('b', null, '每日发现：'), l1.discovery,
+          l1.discoveryLinked === true ? h('span', { className: 'ddr-discovery-linked' }, '插件联动') : null) : null,
       (l1.festival || (card.carryOver && card.carryOver.length)) ? h('div', { className: 'ddr-carry' },
         l1.festival
           ? h('h4', { className: 'ddr-fest-row' },
@@ -587,10 +651,12 @@ function SettingsSection({ store }) {
   const [saved, setSaved] = useState(0);
   const [err, setErr] = useState(null);
   const [tab, setTab] = useState('daily');
+  const [pane, setPane] = useState('privacy');
   const [genMsg, setGenMsg] = useState(null);
   useEffect(() => { store.refresh({ withSize: true }); }, []);
   const st = snap.state;
   const cfg = st && st.config;
+  const links = (st && st.links) || {};
   useEffect(() => {
     if (cfg && cfg.privacy === 'cloud' && !models) store.call('models').then(setModels).catch(() => setModels({ models: [] }));
   }, [cfg && cfg.privacy]);
@@ -602,110 +668,143 @@ function SettingsSection({ store }) {
   };
   const win = st.platform === 'win32';
   const routeKey = cfg.cloudRoute ? cfg.cloudRoute.provider + '\u0000' + cfg.cloudRoute.model : '';
+  const panes = [['privacy', '隐私'], ['health', '健康'], ['report', '报告'], ['cost', '成本']];
+  const hints = {
+    privacy: '哪些内容参与生成、要不要记录键鼠空闲。默认云端摘要 + 键鼠采样。',
+    health: '只做行为提醒，不做医学判断；键鼠采样开关在「隐私」里。',
+    report: '什么时候生成、数据从哪来、报告存到哪里。',
+    cost: '每日预算与计价口径。',
+  };
 
+  const PROJECT_URL = 'https://github.com/Yutai233/dsh-daily-report';
   return h('div', { className: 'ddr-root ddr-set' },
-    // ---------- 1. privacy
-    h('div', { className: 'ddr-group' },
-      h('h3', null, '隐私边界'),
-      h('p', null, '会话正文是否用于生成摘要。统计数字始终在本机计算，模型只负责写句子。'),
-      h('div', { className: 'ddr-choices', role: 'radiogroup', 'aria-label': '隐私边界', style: { padding: '8px 0 12px' } },
-        h(Choice, { checked: cfg.privacy === 'local-only', title: 'B · 仅标题 + 统计（推荐）', desc: '不调用任何模型，正文不出本机；主线由会话标题与改动、交付、失败等事实拼成。', onSelect: () => patch({ privacy: 'local-only' }) }),
-        h(Choice, { checked: cfg.privacy === 'cloud', title: 'A · 云端模型摘要', desc: '把压缩后的「事实包」（你的消息、每轮结论、改动文件）发给所选模型，写 1~2 句「做了什么 + 结果」。效果最好，正文会离开本机；已摘要的会话会缓存，不重复花钱。', onSelect: () => patch({ privacy: 'cloud' }) },
-          h('label', { className: 'ddr-field' }, '摘要模型',
-            h('select', { className: 'ddr-select', value: routeKey, onChange: (e) => { const v = e.target.value; if (!v) patch({ cloudRoute: null }); else { const [provider, model] = v.split('\u0000'); patch({ cloudRoute: { provider, model } }); } } },
-              h('option', { value: '' }, '跟随 DSH 默认模型' + (models && models.defaultRoute ? '（' + models.defaultRoute.model + '）' : '')),
-              (models ? models.models : []).map((m) => h('option', { key: m.provider + m.model, value: m.provider + '\u0000' + m.model }, m.label + ' · ' + m.providerLabel)))),
-          h('span', { className: 'ddr-note' }, '建议选便宜的快速模型；每天约几分钱到一两毛。')),
-        h(Choice, { checked: cfg.privacy === 'local-model', title: 'C · 本地模型摘要', desc: '发给本机的 OpenAI 兼容服务（Ollama、LM Studio、llama.cpp）。正文不出本机，需要自行启动模型；失败时退回 B，不会改用云端。', onSelect: () => patch({ privacy: 'local-model' }) },
-          h('label', { className: 'ddr-field' }, '服务地址', h(TextInput, { value: cfg.localModel.baseUrl, placeholder: 'http://127.0.0.1:11434/v1', onCommit: (v) => patch({ localModel: { ...cfg.localModel, baseUrl: v } }) })),
-          h('label', { className: 'ddr-field' }, '模型名', h(TextInput, { value: cfg.localModel.model, placeholder: 'qwen2.5:7b', onCommit: (v) => patch({ localModel: { ...cfg.localModel, model: v } }) })),
-          h('label', { className: 'ddr-field' }, 'API Key', h(TextInput, { type: 'password', value: cfg.localModel.apiKey, placeholder: '可留空', onCommit: (v) => patch({ localModel: { ...cfg.localModel, apiKey: v } }) })),
-          h('div', { className: 'ddr-field' }, h('span', null),
-            h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
-              h('button', { type: 'button', className: 'ddr-btn', disabled: probe === 'busy', onClick: () => { setProbe('busy'); store.call('probe').then(setProbe).catch((e) => setProbe({ ok: false, error: String(e.message || e) })); } }, probe === 'busy' ? '测试中…' : '测试连接'),
-              probe && probe !== 'busy' ? h('span', { className: probe.ok ? 'ddr-note ddr-ok' : 'ddr-note ddr-err' }, probe.ok ? '可用，响应 ' + probe.ms + 'ms' : probe.error) : null))))),
+    h('div', { className: 'ddr-set-tabs' },
+      h('div', { className: 'ddr-set-tablist', role: 'tablist', 'aria-label': '每日简报设置分类' },
+        panes.map(([id, label]) => h('button', {
+          key: id, type: 'button', role: 'tab', 'aria-selected': pane === id, className: 'ddr-set-tab' + (pane === id ? ' on' : ''),
+          onClick: () => setPane(id),
+        }, label))),
+      h('div', { className: 'ddr-set-links' },
+        h('a', { className: 'ddr-set-link ddr-set-star', href: PROJECT_URL, target: '_blank', rel: 'noopener noreferrer', title: PROJECT_URL }, '点个 Star ⭐'),
+        h('a', { className: 'ddr-set-link', href: PROJECT_URL + '/issues', target: '_blank', rel: 'noopener noreferrer', title: PROJECT_URL + '/issues' }, '遇到问题？提issue↗'),
+        h('a', { className: 'ddr-set-link ddr-set-version', href: PROJECT_URL, target: '_blank', rel: 'noopener noreferrer', title: 'v' + PLUGIN_VERSION }, 'v' + PLUGIN_VERSION))),
+    h('p', { className: 'ddr-note ddr-set-hint' }, hints[pane] || ''),
 
-    // ---------- 2. input sampling
-    h('div', { className: 'ddr-group' },
-      h('h3', null, '健康与作息'),
-      h('p', null, '只做行为提醒，不做医学判断；没有异常时报告里不出现这一节。'),
-      h(Row, {
-        title: '键鼠空闲采样', badge: cfg.inputSampling ? (st.idle.running ? { text: '采样中', blue: true } : { text: '已开启' }) : null,
-        desc: win
-          ? '每分钟读取一次 Windows「距上次键盘/鼠标输入多久」（GetLastInputInfo），只记录空闲时长，不记录按了什么、不截图、不上传。关闭时健康提醒只用 DSH 消息时间粗略估计，并会注明。'
-          : '仅支持 Windows。当前系统下健康提醒只用 DSH 消息时间粗略估计。',
-      }, h(Switch, { checked: cfg.inputSampling, disabled: !win, label: '键鼠空闲采样', onChange: (v) => patch({ inputSampling: v }) })),
+    // ---------- 1. privacy + sampling
+    pane === 'privacy' ? h(React.Fragment, null,
+      h('div', { className: 'ddr-group' },
+        h('h3', null, '隐私边界'),
+        h('p', null, '会话正文是否离开本机。统计数字始终在本机计算，模型只负责写句子。'),
+        h('div', { className: 'ddr-choices', role: 'radiogroup', 'aria-label': '隐私边界', style: { padding: '8px 0 12px' } },
+          h(Choice, { checked: cfg.privacy === 'cloud', title: 'A · 云端模型摘要（默认）', desc: '把压缩后的「事实包」（你的消息、每轮结论、改动文件）发给所选模型，写 1~2 句「做了什么 + 结果」。效果最好，正文会离开本机；已摘要的会话会缓存，不重复花钱。', onSelect: () => patch({ privacy: 'cloud' }) },
+            h('label', { className: 'ddr-field' }, '摘要模型',
+              h('select', { className: 'ddr-select', value: routeKey, onChange: (e) => { const v = e.target.value; if (!v) patch({ cloudRoute: null }); else { const [provider, model] = v.split('\u0000'); patch({ cloudRoute: { provider, model } }); } } },
+                h('option', { value: '' }, '跟随 DSH 默认模型' + (models && models.defaultRoute ? '（' + models.defaultRoute.model + '）' : '')),
+                (models ? models.models : []).map((m) => h('option', { key: m.provider + m.model, value: m.provider + '\u0000' + m.model }, m.label + ' · ' + m.providerLabel)))),
+            h('span', { className: 'ddr-note' }, '建议选便宜的快速模型；每天约几分钱到一两毛。')),
+          h(Choice, { checked: cfg.privacy === 'local-only', title: 'B · 仅标题 + 统计', desc: '不调用任何模型，正文不出本机；主线由会话标题与改动、交付、失败等事实拼成。', onSelect: () => patch({ privacy: 'local-only' }) }),
+          h(Choice, { checked: cfg.privacy === 'local-model', title: 'C · 本地模型摘要', desc: '发给本机的 OpenAI 兼容服务（Ollama、LM Studio、llama.cpp）。正文不出本机，需要自行启动模型；失败时退回 B，不会改用云端。', onSelect: () => patch({ privacy: 'local-model' }) },
+            h('label', { className: 'ddr-field' }, '服务地址', h(TextInput, { value: cfg.localModel.baseUrl, placeholder: 'http://127.0.0.1:11434/v1', onCommit: (v) => patch({ localModel: { ...cfg.localModel, baseUrl: v } }) })),
+            h('label', { className: 'ddr-field' }, '模型名', h(TextInput, { value: cfg.localModel.model, placeholder: 'qwen2.5:7b', onCommit: (v) => patch({ localModel: { ...cfg.localModel, model: v } }) })),
+            h('label', { className: 'ddr-field' }, 'API Key', h(TextInput, { type: 'password', value: cfg.localModel.apiKey, placeholder: '可留空', onCommit: (v) => patch({ localModel: { ...cfg.localModel, apiKey: v } }) })),
+            h('div', { className: 'ddr-field' }, h('span', null),
+              h('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+                h('button', { type: 'button', className: 'ddr-btn', disabled: probe === 'busy', onClick: () => { setProbe('busy'); store.call('probe').then(setProbe).catch((e) => setProbe({ ok: false, error: String(e.message || e) })); } }, probe === 'busy' ? '测试中…' : '测试连接'),
+                probe && probe !== 'busy' ? h('span', { className: probe.ok ? 'ddr-note ddr-ok' : 'ddr-note ddr-err' }, probe.ok ? '可用，响应 ' + probe.ms + 'ms' : probe.error) : null))))),
+      h('div', { className: 'ddr-group' },
+        h('h3', null, '键鼠采样'),
+        h(Row, {
+          title: '键鼠空闲采样', badge: cfg.inputSampling ? (st.idle.running ? { text: '采样中', blue: true } : { text: '已开启' }) : null,
+          desc: win
+            ? '每分钟读取一次 Windows「距上次键盘/鼠标输入多久」（GetLastInputInfo），只记录空闲时长，不记录按了什么、不截图、不上传。关闭时健康提醒只用 DSH 消息时间粗略估计，并会注明。'
+            : '仅支持 Windows。当前系统下健康提醒只用 DSH 消息时间粗略估计。',
+        }, h(Switch, { checked: cfg.inputSampling, disabled: !win, label: '键鼠空闲采样', onChange: (v) => patch({ inputSampling: v }) }))))
+      : null,
+
+    // ---------- 2. health
+    pane === 'health' ? h('div', { className: 'ddr-group' },
       h(Row, { title: '健康提醒', desc: '久坐、熬夜、午休没离开、周末加班。' }, h(Switch, { checked: cfg.health.enabled, label: '健康提醒', onChange: (v) => patch({ health: { ...cfg.health, enabled: v } }) })),
-      cfg.health.enabled ? h(Row, { title: '久坐实时提醒', desc: '在 DSH 里连续聊天超过阈值时，直接弹系统通知提醒你起来，不用等到第二天。只按你的消息时间估算：15 分钟没有消息就算离开，从 0 重新计时。' },
+      cfg.health.enabled ? h(Row, { title: '久坐实时提醒', desc: '在 DSH 里连续用机超过阈值时，直接弹系统通知提醒你起来，不用等到第二天。计时同时看两条线：你的消息时间（15 分钟没有消息就算离开）和键鼠采样（开了「键鼠空闲采样」才算）。哪条线证明你更早就坐下了就用哪条，躲不掉。' },
         h(Switch, { checked: cfg.health.liveReminder, label: '久坐实时提醒', onChange: (v) => patch({ health: { ...cfg.health, liveReminder: v } }) })) : null,
       cfg.health.enabled ? h(Row, { title: '提醒阈值', desc: '连续用机超过多少分钟算久坐；几点以后算熬夜。' },
         h(NumberInput, { label: '久坐提醒分钟数', value: cfg.health.sitLimitMin, min: 20, max: 180, onCommit: (v) => patch({ health: { ...cfg.health, sitLimitMin: v } }) }), h('span', { className: 'ddr-note' }, '分钟'),
-        h(NumberInput, { label: '熬夜提醒时刻', value: cfg.health.lateHour, min: 20, max: 26, onCommit: (v) => patch({ health: { ...cfg.health, lateHour: v } }), width: 64 }), h('span', { className: 'ddr-note' }, '点后')) : null),
+        h(NumberInput, { label: '熬夜提醒时刻', value: cfg.health.lateHour, min: 20, max: 26, onCommit: (v) => patch({ health: { ...cfg.health, lateHour: v } }), width: 64 }), h('span', { className: 'ddr-note' }, '点后')) : null)
+      : null,
 
-    // ---------- 3. delivery
-    h('div', { className: 'ddr-group' },
-      h('h3', null, '投递时机'),
-      h('p', null, '固定时间会在关机时错过；首次打开不会错过，但看到报告的时间不固定。两者可以并存。'),
-      h(Row, { title: '生成方式' },
-        h(Seg, { label: '生成方式', value: cfg.delivery, onChange: (v) => patch({ delivery: v }), options: [{ value: 'both', label: '两者并存' }, { value: 'fixed', label: '固定时间' }, { value: 'first-open', label: '首次打开' }] })),
-      cfg.delivery !== 'first-open' ? h(Row, { title: '固定时间', desc: '到点生成并落盘' + (cfg.systemNotify ? '，同时发系统通知' : '') + '。' },
-        h('input', { className: 'ddr-input time', 'aria-label': '固定生成时间', type: 'time', value: cfg.deliveryTime, onChange: (e) => patch({ deliveryTime: e.target.value }) })) : null,
-      h(Row, { title: '报告覆盖哪一天', desc: '自动：18 点前看昨天，18 点后看今天。' },
-        h(Seg, { label: '报告日期', value: cfg.reportRange, onChange: (v) => patch({ reportRange: v }), options: [{ value: 'auto', label: '自动' }, { value: 'yesterday', label: '昨天' }, { value: 'today', label: '今天' }] })),
-      h(Row, { title: '欢迎页弹出卡片', desc: '新会话页「探索未至之境」的鲸鱼上方弹出当天简报，每天一次；点击鲸鱼可随时再看。' }, h(Switch, { checked: cfg.popup, label: '欢迎页弹出卡片', onChange: (v) => patch({ popup: v }) })),
-      cfg.delivery !== 'first-open' ? h(Row, { title: '系统通知', desc: '固定时间生成后弹出 Windows / macOS / Linux 通知。' }, h(Switch, { checked: cfg.systemNotify, label: '系统通知', onChange: (v) => patch({ systemNotify: v }) })) : null,
-      h(Row, { title: '周报 / 月报', desc: '每周一生成上周周报，每月 1 日生成上月月报。' },
-        h(Switch, { checked: cfg.weekly.enabled, label: '周报', onChange: (v) => patch({ weekly: { ...cfg.weekly, enabled: v } }) }), h('span', { className: 'ddr-note' }, '周报'),
-        h(Switch, { checked: cfg.monthly.enabled, label: '月报', onChange: (v) => patch({ monthly: { ...cfg.monthly, enabled: v } }) }), h('span', { className: 'ddr-note' }, '月报'))),
+    // ---------- 3. report: delivery + sources + archive
+    pane === 'report' ? h(React.Fragment, null,
+      h('div', { className: 'ddr-group' },
+        h('h3', null, '投递时机'),
+        h('p', null, '固定时间会在关机时错过；首次打开不会错过，但看到报告的时间不固定。两者可以并存。'),
+        h(Row, { title: '生成方式' },
+          h(Seg, { label: '生成方式', value: cfg.delivery, onChange: (v) => patch({ delivery: v }), options: [{ value: 'both', label: '两者并存' }, { value: 'fixed', label: '固定时间' }, { value: 'first-open', label: '首次打开' }] })),
+        cfg.delivery !== 'first-open' ? h(Row, { title: '固定时间', desc: '到点生成并落盘' + (cfg.systemNotify ? '，同时发系统通知' : '') + '。' },
+          h('input', { className: 'ddr-input time', 'aria-label': '固定生成时间', type: 'time', value: cfg.deliveryTime, onChange: (e) => patch({ deliveryTime: e.target.value }) })) : null,
+        h(Row, { title: '报告覆盖哪一天', desc: '自动：18 点前看昨天，18 点后看今天。' },
+          h(Seg, { label: '报告日期', value: cfg.reportRange, onChange: (v) => patch({ reportRange: v }), options: [{ value: 'auto', label: '自动' }, { value: 'yesterday', label: '昨天' }, { value: 'today', label: '今天' }] })),
+        h(Row, { title: '欢迎页弹出卡片', desc: '新会话页「探索未至之境」的鲸鱼上方弹出当天简报，每天一次；点击鲸鱼可随时再看。' }, h(Switch, { checked: cfg.popup, label: '欢迎页弹出卡片', onChange: (v) => patch({ popup: v }) })),
+        cfg.delivery !== 'first-open' ? h(Row, { title: '系统通知', desc: '固定时间生成后弹出 Windows / macOS / Linux 通知。' }, h(Switch, { checked: cfg.systemNotify, label: '系统通知', onChange: (v) => patch({ systemNotify: v }) })) : null,
+        h(Row, { title: '周报 / 月报', desc: '每周一生成上周周报，每月 1 日生成上月月报。' },
+          h(Switch, { checked: cfg.weekly.enabled, label: '周报', onChange: (v) => patch({ weekly: { ...cfg.weekly, enabled: v } }) }), h('span', { className: 'ddr-note' }, '周报'),
+          h(Switch, { checked: cfg.monthly.enabled, label: '月报', onChange: (v) => patch({ monthly: { ...cfg.monthly, enabled: v } }) }), h('span', { className: 'ddr-note' }, '月报'))),
+      h('div', { className: 'ddr-group' },
+        h('h3', null, '数据来源'),
+        h(Row, { title: '天气', desc: cfg.weather.location ? '当前：' + cfg.weather.location + (cfg.weather.latitude !== null ? '（' + cfg.weather.latitude.toFixed(2) + ', ' + cfg.weather.longitude.toFixed(2) + '）' : '') + '。Open-Meteo，免费、无需 Key，只在下雨、降温、空气差时提醒。' : '填写城市后启用。Open-Meteo，免费、无需 Key。' },
+          h(Switch, { checked: cfg.weather.enabled, label: '天气', onChange: (v) => patch({ weather: { ...cfg.weather, enabled: v } }) })),
+        cfg.weather.enabled ? h('div', { className: 'ddr-row stack' },
+          h('div', { style: { display: 'flex', gap: 8 } },
+            h(TextInput, { label: '天气城市', value: cfg.weather.location, placeholder: '城市，如 上海', onCommit: (v) => { setGeo(null); if (!v.trim()) { patch({ weather: { ...cfg.weather, location: '', latitude: null, longitude: null } }); return; } store.call('geocode', { name: v }).then((r) => { setGeo(r.results || []); if (r.results && r.results[0]) { const g = r.results[0]; patch({ weather: { ...cfg.weather, location: g.name, latitude: g.latitude, longitude: g.longitude } }); } }).catch((e) => setErr(String(e.message || e))); } })),
+          geo && geo.length > 1 ? h('div', { className: 'ddr-reports' }, geo.map((g, i) => h('div', { key: i, className: 'ddr-report' },
+            h('span', null, g.name + ' · ' + [g.admin1, g.country].filter(Boolean).join('，')),
+            h('button', { type: 'button', className: 'ddr-link', onClick: () => { setGeo(null); patch({ weather: { ...cfg.weather, location: g.name, latitude: g.latitude, longitude: g.longitude } }); } }, '用这个')))) : null,
+          geo && geo.length === 0 ? h('span', { className: 'ddr-note ddr-err' }, '没找到这个地点') : null) : null,
+        h(Row, { title: 'dsh 启停心跳', desc: '每分钟记一次心跳，下次启动时把最后一次心跳当作关闭时间（崩溃、强关也不丢）。' + (st.host && st.host.startedAt ? '本次启动于 ' + fmtClock(st.host.startedAt) + '。' : '') },
+          h(Switch, { checked: cfg.heartbeat, label: 'dsh 启停心跳', onChange: (v) => patch({ heartbeat: v }) })),
+        h(Row, { title: '统计子代理会话', desc: '把子代理的 token 与工具调用也计入。' }, h(Switch, { checked: cfg.includeSubagents, label: '统计子代理会话', onChange: (v) => patch({ includeSubagents: v }) }))),
+      h('div', { className: 'ddr-group' },
+        h('h3', null, '插件联动'),
+        h('p', null, '是否允许日报读取下面两个插件提供的运行时数据。关掉任何一项，日报就只用自己的会话记录，不去碰它们；这不影响两个插件本身的工作。'),
+        h(Row, {
+          title: 'dsh-context（宿主上下文）',
+          desc: '读取宿主上下文插件的运行状态与压缩信息；billion-context 的账本也依赖它。',
+          badge: { text: cfg.links.context ? (links.context ? '运行中' : '未检测到') : '已关闭', blue: !!(cfg.links.context && links.context) },
+        }, h(Switch, { checked: cfg.links.context, label: 'dsh-context 联动', onChange: (v) => patch({ links: { ...cfg.links, context: v } }) })),
+        h(Row, {
+          title: 'billion-context（bili 账本）',
+          desc: '把当天的压缩账本折算成净节省，显示在卡片 token 角标上，并作为「今日发现」里的数值证据。需要 dsh-context 同时运行。' +
+            (cfg.links.bili && !links.context ? ' 当前 dsh-context 未运行，暂时不会读取。' : ''),
+          badge: { text: cfg.links.bili ? (links.bili ? '运行中' : '未检测到') : '已关闭', blue: !!(cfg.links.bili && links.bili) },
+        }, h(Switch, { checked: cfg.links.bili, label: 'billion-context 联动', onChange: (v) => patch({ links: { ...cfg.links, bili: v } }) }))),
+      h('div', { className: 'ddr-group' },
+        h('h3', null, '报告与存档'),
+        h(Row, { title: 'Agent 工具状态', desc: st.toolAvailable === true ? 'daily_report 已注册，可让 agent 查询日报、周报和月报。' : st.toolAvailable === false ? 'daily_report 未注册。当前仍可通过此设置页查看报告；' + (st.toolError || '请检查 Host 工具依赖与日志。') + '' : '当前 Host 未返回工具状态，请更新 Host 后刷新。', badge: { text: st.toolAvailable === true ? '可用' : st.toolAvailable === false ? '不可用' : '未知', blue: st.toolAvailable === true } }),
+        h(ReportDirectory, { store, value: cfg.reportsDir, actualPath: st.reportsDir, defaultPath: st.defaultReportsDir }),
+        h('p', null, 'Markdown 可直接让 agent 读取回答「上周三我做了什么」。' + (st.dataBytes ? '插件数据及归档共 ' + fmtBytes(st.dataBytes) + '。' : '')),
+        h('div', { className: 'ddr-row', style: { borderBottom: 0 } },
+          h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+            h('button', { type: 'button', className: 'ddr-btn primary', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('daily').then((v) => store.showHtml('DSH 每日简报 · ' + v.card.label, v.html, 'daily', v.key, origin, v.sessionIds)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'daily' ? '生成中…' : '生成日报'),
+            h('button', { type: 'button', className: 'ddr-btn', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('weekly', { current: true }).then((v) => store.showHtml('DSH 周报 · ' + v.label, v.html, 'weekly', v.key, origin, v.sessionIds)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'weekly' ? '生成中…' : '本周周报'),
+            h('button', { type: 'button', className: 'ddr-btn', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('monthly', { current: true }).then((v) => store.showHtml('DSH 月报 · ' + v.label, v.html, 'monthly', v.key, origin, v.sessionIds)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'monthly' ? '生成中…' : '本月月报')),
+          genMsg ? h('span', { className: 'ddr-note ddr-err' }, genMsg) : null),
+        h('div', { className: 'ddr-tabs' }, h(Seg, { label: '报告类型', value: tab, onChange: setTab, options: [{ value: 'daily', label: '日报' }, { value: 'weekly', label: '周报' }, { value: 'monthly', label: '月报' }] })),
+        h('div', { className: 'ddr-reports' },
+          (st.reports[tab] || []).length ? st.reports[tab].map((k) => h('div', { key: k, className: 'ddr-report' },
+            h('span', null, k),
+            h('button', { type: 'button', className: 'ddr-link', 'aria-label': '查看报告 ' + k, onClick: (e) => store.view(tab, k, k, e.currentTarget) }, '查看'),
+            h('button', { type: 'button', className: 'ddr-link', 'aria-label': '在浏览器打开 ' + k, onClick: () => store.open(tab, k) }, '浏览器打开'))) : h('p', { className: 'ddr-note' }, '暂无')),
+        h(Row, { title: '保留天数', desc: '更早的原始采样、事实与日报会被清理。' },
+          h(NumberInput, { label: '报告保留天数', value: cfg.retentionDays, min: 7, max: 3650, onCommit: (v) => patch({ retentionDays: v }) }), h('span', { className: 'ddr-note' }, '天'))))
+      : null,
 
-    // ---------- data sources
-    h('div', { className: 'ddr-group' },
-      h('h3', null, '数据来源'),
-      h(Row, { title: '天气', desc: cfg.weather.location ? '当前：' + cfg.weather.location + (cfg.weather.latitude !== null ? '（' + cfg.weather.latitude.toFixed(2) + ', ' + cfg.weather.longitude.toFixed(2) + '）' : '') + '。Open-Meteo，免费、无需 Key，只在下雨、降温、空气差时提醒。' : '填写城市后启用。Open-Meteo，免费、无需 Key。' },
-        h(Switch, { checked: cfg.weather.enabled, label: '天气', onChange: (v) => patch({ weather: { ...cfg.weather, enabled: v } }) })),
-      cfg.weather.enabled ? h('div', { className: 'ddr-row stack' },
-        h('div', { style: { display: 'flex', gap: 8 } },
-          h(TextInput, { label: '天气城市', value: cfg.weather.location, placeholder: '城市，如 上海', onCommit: (v) => { setGeo(null); if (!v.trim()) { patch({ weather: { ...cfg.weather, location: '', latitude: null, longitude: null } }); return; } store.call('geocode', { name: v }).then((r) => { setGeo(r.results || []); if (r.results && r.results[0]) { const g = r.results[0]; patch({ weather: { ...cfg.weather, location: g.name, latitude: g.latitude, longitude: g.longitude } }); } }).catch((e) => setErr(String(e.message || e))); } })),
-        geo && geo.length > 1 ? h('div', { className: 'ddr-reports' }, geo.map((g, i) => h('div', { key: i, className: 'ddr-report' },
-          h('span', null, g.name + ' · ' + [g.admin1, g.country].filter(Boolean).join('，')),
-          h('button', { type: 'button', className: 'ddr-link', onClick: () => { setGeo(null); patch({ weather: { ...cfg.weather, location: g.name, latitude: g.latitude, longitude: g.longitude } }); } }, '用这个')))) : null,
-        geo && geo.length === 0 ? h('span', { className: 'ddr-note ddr-err' }, '没找到这个地点') : null) : null,
-      h(Row, { title: 'dsh 启停心跳', desc: '每分钟记一次心跳，下次启动时把最后一次心跳当作关闭时间（崩溃、强关也不丢）。' + (st.host && st.host.startedAt ? '本次启动于 ' + fmtClock(st.host.startedAt) + '。' : '') },
-        h(Switch, { checked: cfg.heartbeat, label: 'dsh 启停心跳', onChange: (v) => patch({ heartbeat: v }) })),
-      h(Row, { title: '统计子代理会话', desc: '把子代理的 token 与工具调用也计入。' }, h(Switch, { checked: cfg.includeSubagents, label: '统计子代理会话', onChange: (v) => patch({ includeSubagents: v }) }))),
-
-    // ---------- cost
-    h('div', { className: 'ddr-group' },
-      h('h3', null, '成本与预算'),
+    // ---------- 4. cost
+    pane === 'cost' ? h('div', { className: 'ddr-group' },
       h(Row, { title: '每日预算', desc: '超出时第 1 层显示提醒；0 表示不设。' },
         h('span', { className: 'ddr-note' }, '¥'), h(NumberInput, { label: '每日预算（元）', value: cfg.budget.dailyCny, min: 0, max: 100000, step: 0.5, onCommit: (v) => patch({ budget: { ...cfg.budget, dailyCny: v } }) })),
-      h(Row, { title: '单价（元 / 百万 tokens）', desc: '用于估算花费与峰谷建议，按你的实际账单调整。谷时 ' + cfg.pricing.offpeak.start + '–' + cfg.pricing.offpeak.end + ' 按 ' + Math.round(cfg.pricing.offpeakDiscount * 100) + '% 计。', stack: true },
+      h(Row, { title: '单价（元 / 百万 tokens）', desc: '峰时（工作日 09:00–12:00、14:00–18:00）按下面的价目，其余时段（含周末与法定节假日）按 ' + Math.round(cfg.pricing.offpeakDiscount * 100) + '% 计；默认值取自 DeepSeek 官方价目（Flash），Pro 模型按 3 倍估。', stack: true },
         h('div', { style: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' } },
-          [['inputPerM', '输入'], ['outputPerM', '输出'], ['cacheReadPerM', '缓存读'], ['cacheWritePerM', '缓存写']].map(([k, label]) => h('label', { key: k, className: 'ddr-note', style: { display: 'flex', gap: 6, alignItems: 'center' } }, label,
-            h(NumberInput, { value: cfg.pricing[k], min: 0, max: 1000, step: 0.1, width: 72, onCommit: (v) => patch({ pricing: { ...cfg.pricing, [k]: v } }) })))))),
-
-    // ---------- reports
-    h('div', { className: 'ddr-group' },
-      h('h3', null, '报告'),
-      h(Row, { title: 'Agent 工具状态', desc: st.toolAvailable === true ? 'daily_report 已注册，可让 agent 查询日报、周报和月报。' : st.toolAvailable === false ? 'daily_report 未注册。当前仍可通过此设置页查看报告；' + (st.toolError || '请检查 Host 工具依赖与日志。') + '' : '当前 Host 未返回工具状态，请更新 Host 后刷新。', badge: { text: st.toolAvailable === true ? '可用' : st.toolAvailable === false ? '不可用' : '未知', blue: st.toolAvailable === true } }),
-      h(ReportDirectory, { store, value: cfg.reportsDir, actualPath: st.reportsDir, defaultPath: st.defaultReportsDir }),
-      h('p', null, 'Markdown 可直接让 agent 读取回答「上周三我做了什么」。' + (st.dataBytes ? '插件数据及归档共 ' + fmtBytes(st.dataBytes) + '。' : '')),
-      h('div', { className: 'ddr-row', style: { borderBottom: 0 } },
-        h('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
-          h('button', { type: 'button', className: 'ddr-btn primary', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('daily').then((v) => store.showHtml('DSH 每日简报 · ' + v.card.label, v.html, 'daily', v.key, origin, v.sessionIds)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'daily' ? '生成中…' : '生成日报'),
-          h('button', { type: 'button', className: 'ddr-btn', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('weekly', { current: true }).then((v) => store.showHtml('DSH 周报 · ' + v.label, v.html, 'weekly', v.key, origin, v.sessionIds)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'weekly' ? '生成中…' : '本周周报'),
-          h('button', { type: 'button', className: 'ddr-btn', disabled: !!snap.busy, onClick: (e) => { const origin = captureViewerOrigin(e.currentTarget); setGenMsg(null); store.generate('monthly', { current: true }).then((v) => store.showHtml('DSH 月报 · ' + v.label, v.html, 'monthly', v.key, origin, v.sessionIds)).catch((e) => setGenMsg(String(e.message || e))); } }, snap.busy === 'monthly' ? '生成中…' : '本月月报')),
-        genMsg ? h('span', { className: 'ddr-note ddr-err' }, genMsg) : null),
-      h('div', { className: 'ddr-tabs' }, h(Seg, { label: '报告类型', value: tab, onChange: setTab, options: [{ value: 'daily', label: '日报' }, { value: 'weekly', label: '周报' }, { value: 'monthly', label: '月报' }] })),
-      h('div', { className: 'ddr-reports' },
-        (st.reports[tab] || []).length ? st.reports[tab].map((k) => h('div', { key: k, className: 'ddr-report' },
-          h('span', null, k),
-          h('button', { type: 'button', className: 'ddr-link', 'aria-label': '查看报告 ' + k, onClick: (e) => store.view(tab, k, k, e.currentTarget) }, '查看'),
-          h('button', { type: 'button', className: 'ddr-link', 'aria-label': '在浏览器打开 ' + k, onClick: () => store.open(tab, k) }, '浏览器打开'))) : h('p', { className: 'ddr-note' }, '暂无')),
-      h(Row, { title: '节日彩蛋', desc: '节日当天，卡片上的「明日待续」位置换成一颗主题胶囊（如 🎄 圣诞），后面跟一句 10 字以内的祝福。纯本地查表，不调模型、不联网；关掉后整块不出现。' },
-        h(Switch, { checked: cfg.festival !== false, label: '节日彩蛋', onChange: (v) => patch({ festival: v }) })),
-      h(Row, { title: '保留天数', desc: '更早的原始采样、事实与日报会被清理。' },
-        h(NumberInput, { label: '报告保留天数', value: cfg.retentionDays, min: 7, max: 3650, onCommit: (v) => patch({ retentionDays: v }) }), h('span', { className: 'ddr-note' }, '天'))),
+          [['inputPerM', '输入（未命中）'], ['outputPerM', '输出'], ['cacheReadPerM', '缓存读（命中）']].map(([k, label]) => h('label', { key: k, className: 'ddr-note', style: { display: 'flex', gap: 6, alignItems: 'center' } }, label,
+            h(NumberInput, { label: label + '单价', value: cfg.pricing[k], min: 0, max: 1000, step: 0.1, width: 72, onCommit: (v) => patch({ pricing: { ...cfg.pricing, [k]: v } }) }))))))
+      : null,
 
     snap.error || snap.refreshError ? h('p', { className: 'ddr-note ddr-err', role: 'alert' }, snap.error || ('状态刷新失败：' + snap.refreshError)) : null,
     err ? h('p', { className: 'ddr-note ddr-err', role: 'alert' }, err) : null,

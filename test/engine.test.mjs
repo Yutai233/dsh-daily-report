@@ -1,13 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
 
 const dir = mkdtempSync(path.join(tmpdir(), 'ddr-engine-'))
 process.env.DSH_DAILY_REPORT_DIR = dir
-const { resolveReportTarget, targetDate, generatePeriod, notify } = await import('../lib/engine.js')
+const { resolveReportTarget, targetDate, generatePeriod, notify, prefetchWeather } = await import('../lib/engine.js')
 const { normalizeConfig } = await import('../lib/config.js')
 const { collectDay } = await import('../lib/collect/sessions.js')
 const { createCompleter } = await import('../lib/summarize.js')
@@ -103,9 +103,25 @@ test('Windows toast submits escaped XML and exposes errors without unhandled rej
   const ps = Buffer.from(command.args.at(-1), 'base64').toString('utf16le')
   assert.match(ps, /&apos;.*&lt;.*&amp;/)
   assert.match(ps, /ErrorActionPreference="Stop"/)
+  // 用自己的 AUMID 发通知（可在「通知和操作」里单独管理），失败时回退 PowerShell 的。
+  assert.match(ps, /Dsh\.DailyReport/)
+  assert.match(ps, /WindowsPowerShell\\v1\.0\\powershell\.exe/)
+  assert.match(ps, /AppUserModelId/)
   const bad = await notify('test', 'test', () => {}, { platform: 'win32', spawnImpl: fake(1) })
   assert.equal(bad.ok, false)
   assert.match(bad.error, /exit code: 1/)
+})
+
+test('evening warm-up serves a cached forecast without touching the network', async () => {
+  // 前一天的预报不会再变：缓存命中就直接返回，哪怕 entry.at 很旧。
+  const cacheDir = path.join(dir, 'cache')
+  mkdirSync(cacheDir, { recursive: true })
+  const value = { date: '2020-01-02', tMin: 1, tMax: 6, icon: 'rain', text: '阵雨', location: '南京', tips: ['记得带伞'] }
+  writeFileSync(path.join(cacheDir, 'weather.json'), JSON.stringify({ '2020-01-02@32.06,118.79': { at: 0, value } }), 'utf8')
+  const warm = normalizeConfig({ weather: { enabled: true, latitude: 32.06, longitude: 118.79, location: '南京' }, heartbeat: false, health: { enabled: false } })
+  assert.deepEqual(await prefetchWeather(warm, '2020-01-02'), value)
+  // 天气关闭时不预热，也不碰缓存文件。
+  assert.equal(await prefetchWeather(cfg, '2020-01-02'), null)
 })
 
 test.after(() => rmSync(dir, { recursive: true, force: true }))

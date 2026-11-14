@@ -86,25 +86,65 @@ test('numeric drafts restore empty input, clamp visibly, round integer fields an
   render(api.NumberInput, props).props.onBlur(); assert.deepEqual(seen, [0.07]);
 });
 
-test('settings show available, unavailable and legacy tool diagnostics without config writes', () => {
+test('settings split into privacy / health / report / cost tabs without config writes', () => {
   for (const [toolAvailable, expected] of [[true, '已注册'], [false, '未注册'], [undefined, '未返回工具状态']]) {
     const { api, render } = harness();
     const state = { config: normalizeConfig({ privacy: 'local-only' }), toolAvailable, platform: 'win32', idle: {}, reports: {}, dataDir: 'C:/synthetic/' + 'long/'.repeat(30) };
-    const tree = render(api.SettingsSection, { store: mockStore(state) });
+    const store = mockStore(state);
+    let tree = render(api.SettingsSection, { store });
+
+    const tabs = nodes(tree).filter((n) => n.props.role === 'tab');
+    assert.deepEqual(tabs.map((n) => text(n)), ['隐私', '健康', '报告', '成本'], 'four category tabs');
+    assert.equal(tabs[0].props['aria-selected'], true, 'privacy opens first');
+
+    const open = (label) => {
+      const tab = nodes(tree).find((n) => n.props.role === 'tab' && text(n) === label);
+      assert.ok(tab, 'tab ' + label);
+      tab.props.onClick();
+      tree = render(api.SettingsSection, { store });
+    };
+
+    // privacy: boundary choices + sampling live together
+    assert.match(text(tree), /隐私边界/);
+    assert.ok(nodes(tree).find((n) => n.props.title === '键鼠空闲采样'), 'sampling row lives under privacy');
+    assert.doesNotMatch(text(tree), /Agent 工具状态/, 'report archive is not on the privacy pane');
+
+    open('健康');
+    assert.ok(nodes(tree).find((n) => n.props.title === '健康提醒'), 'health rows live under the health pane');
+    assert.ok(nodes(tree).find((n) => n.props.title === '久坐实时提醒'));
+    assert.doesNotMatch(text(tree), /隐私边界/);
+
+    open('报告');
+    assert.match(text(tree), /投递时机/);
+    assert.match(text(tree), /数据来源/);
     const row = nodes(tree).find((n) => n.props.title === 'Agent 工具状态');
     assert.match(row.props.desc, new RegExp(expected));
+    assert.match(text(tree), /报告与存档/);
+    assert.match(text(tree), /插件联动/);
+    const ctxRow = nodes(tree).find((n) => n.props.title === 'dsh-context（宿主上下文）');
+    const biliRow = nodes(tree).find((n) => n.props.title === 'billion-context（bili 账本）');
+    assert.ok(ctxRow && biliRow, 'the two linked plugins get their own rows');
+    assert.ok(nodes(tree).find((n) => n.props.label === 'dsh-context 联动'));
+    assert.ok(nodes(tree).find((n) => n.props.label === 'billion-context 联动'));
+    assert.deepEqual(nodes(tree).find((n) => n.props.label === 'dsh-context 联动').props.checked, true, 'link switches mirror config defaults');
+    assert.match(biliRow.props.desc, /dsh-context/, 'bili is documented as depending on dsh-context');
+
+    open('成本');
     const numeric = nodes(tree).filter((n) => n.type === api.NumberInput);
-    assert.ok(numeric.filter((n) => n.props.label).length >= 4);
+    assert.ok(numeric.filter((n) => n.props.label).length >= 4, 'budget plus three unit prices');
   }
 });
 
-test('morning card labels fallback and weather date separately from report date', () => {
+test('morning card labels fallback and weather day relative to the report date', () => {
   global.document = { body: {} };
   const { api, render } = harness();
   const state = { config: {}, card: { key: '2026-11-10', label: '11月10日', fallbackNote: '11-11 无活动，显示 11-10', layer1: { headline: '合成数据', weather: { date: '2026-11-12', label: '今日天气 11-12', text: '晴' } } } };
   const tree = render(api.MorningCard, { store: mockStore(state), anchorRef: { current: null }, onClose() {} });
+  const title = text(nodes(tree).find((n) => n.props.className === 'ddr-title'));
   assert.match(text(tree), /11-11 无活动，显示 11-10/);
-  assert.match(text(tree), /今日天气 11-12/);
+  assert.match(title, /11月12日/);
+  assert.match(title, /晴/);
+  assert.doesNotMatch(title, /天气 11-12|今日天气/);
   assert.match(text(tree), /11月10日/);
 });
 
@@ -116,16 +156,22 @@ test('morning card merges weather into the date row and drops the duplicated wea
   const tree = render(api.MorningCard, { store: mockStore({ config: {}, card }), anchorRef: { current: null }, onClose() {} });
   const title = text(nodes(tree).find((n) => n.props.className === 'ddr-title'));
   assert.match(title, /11月13日 周五/);
-  assert.match(title, /☁ 12~18°C 阵雨 · 南京/);
+  // 天气按「哪天的预报 + 地点」开头，后面才是具体数据，不再重复写 MM-DD。
+  assert.match(title, /今日\s+南京\s*·\s*☁ 12~18°C 阵雨/);
   assert.match(title, /记得带伞/);
   assert.doesNotMatch(title, /天气 11-13/);
   assert.ok(!nodes(tree).some((n) => n.props.className === 'ddr-line' && text(n).includes('阵雨')), 'weather must not keep its own body line');
   assert.doesNotMatch(text(tree), /dsh 12:45 启动/, 'card drops the dsh uptime line');
-  // 天气日期与报告日期不是同一天时，保留天气日期，避免丢掉"这份天气属于哪天"。
-  card.layer1 = { headline: '合成数据', weather: { date: '2026-11-12', label: '天气 11-12', text: '晴' } };
+  // 报告日的次日预报（早晨简报的常态）读作“明日”。
+  card.layer1 = { headline: '合成数据', weather: { date: '2026-11-14', label: '天气 11-14', text: '天气 11-14 · 🌧 13~18°C 阵雨 · 南京', tip: '记得带伞' } };
+  const tomorrow = text(nodes(render(api.MorningCard, { store: mockStore({ config: {}, card }), anchorRef: { current: null }, onClose() {} })).find((n) => n.props.className === 'ddr-title'));
+  assert.match(tomorrow, /明日\s+南京\s*·\s*🌧 13~18°C 阵雨/);
+  assert.doesNotMatch(tomorrow, /天气 11-14/);
+  // 旧报告没有 location 字段时按 text 末尾反推地点；没有地点就不补。
+  card.layer1 = { headline: '合成数据', weather: { date: '2026-11-12', label: '天气 11-12', text: '天气 11-12 · ☀ 8~15°C 晴' } };
   const other = text(nodes(render(api.MorningCard, { store: mockStore({ config: {}, card }), anchorRef: { current: null }, onClose() {} })).find((n) => n.props.className === 'ddr-title'));
   assert.match(other, /11月13日 周五/);
-  assert.match(other, /天气 11-12 ·\s*晴/);
+  assert.match(other, /昨日\s*·\s*☀ 8~15°C 晴/);
 });
 
 test('morning card puts tokens beside the alert pill and shows the report generation cost', () => {
@@ -135,7 +181,7 @@ test('morning card puts tokens beside the alert pill and shows the report genera
     config: {},
     card: {
       key: '2026-11-13', label: '11月13日 周五', gen,
-      layer1: { headline: '9 个会话 · 580 次工具 · 6822 万 tokens（约 ¥19.58）', usage, alerts: ['连续用机 1h07m 未休息'], oneLiner: '一句话' },
+      layer1: { headline: '9 个会话 · 580 次工具 · 6822 万 tokens（约 ¥19.58）', usage, alerts: ['连续 1h07m 未休息'], oneLiner: '一句话' },
       usage: { rows: [{ label: 'Tokens', value: '6822 万', delta: '+5%', trend: 'up' }], spark: [1, 2, 3] },
     },
   });
@@ -143,10 +189,12 @@ test('morning card puts tokens beside the alert pill and shows the report genera
   const tree = render(api.MorningCard, { store: mockStore(state({ calls: 11, tokens: '12.3 万', cny: '¥0.12', estimated: false }, usage)), anchorRef: { current: null }, onClose() {} });
   const row = nodes(tree).find((n) => n.props.className === 'ddr-alerts');
   assert.ok(row, 'usage shares the alert row');
-  assert.match(text(row), /连续用机 1h07m 未休息/);
+  assert.match(text(row), /连续 1h07m 未休息/);
   assert.match(text(row), /6822 万 tokens/);
   assert.match(text(row), /▲ \+12%/);
-  assert.match(text(row), /（约 ¥19\.58）/);
+  // 花费不再挤在同一行，挪进 title，等着鼠标悬停才出现。
+  assert.doesNotMatch(text(row), /（约 ¥19\.58）/);
+  assert.match(nodes(row).find((n) => n.props.className === 'ddr-usage').props.title, /¥19\.58/);
   assert.doesNotMatch(text(tree), /9 个会话/, 'card keeps only tokens and cost of the usage line');
   assert.doesNotMatch(text(tree), /580 次工具/);
   assert.match(text(tree), /生成 12\.3 万 tokens（¥0\.12）/);
@@ -201,7 +249,7 @@ test('festival day swaps the carry-over title for a themed pill and keeps the li
   // 节日当天没有待续时，胶囊也单独出现
   card.carryOver = [];
   assert.match(text(render(api.MorningCard, { store: mockStore(state), anchorRef: { current: null }, onClose() {} })), /🎄 圣诞/);
-  // 无节日 / 关掉开关 → 回退「明日待续 · N」
+  // 无节日 → 回退「明日待续 · N」
   card.layer1 = { carryOverCount: 2 };
   card.carryOver = [{ kind: 'todo', text: '写测试' }];
   assert.match(text(render(api.MorningCard, { store: mockStore(state), anchorRef: { current: null }, onClose() {} })), /明日待续 · 1/);

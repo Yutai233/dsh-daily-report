@@ -5,7 +5,7 @@ export const sampleDaily = {
   layer1: {
     weather: { text: '☁ 9~14°C 小雨 · 上海', tip: '建议带伞' }, host: 'dsh 08:52 启动，在线 6h20m',
     headline: '3 个会话 · 105 次工具 · 84 万 tokens（约 ¥1.20）', oneLiner: '完成插件调研，开始设计日报功能方案。',
-    alerts: ['连续用机 2h10m 未休息', '23:40 后仍在工作'], carryOverCount: 2,
+    alerts: ['连续 2h10m 未休息', '23:40 仍在工作'], carryOverCount: 2,
   },
   sections: {
     mainline: [{ time: '09:12', title: '每日简报 | 设计', summary: '完成架构设计\n实现离线报告 <安全>。', sessionId: 'session-demo', source: 'template' }],
