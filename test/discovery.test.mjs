@@ -12,8 +12,8 @@ const { collectDay } = await import('../lib/collect/sessions.js')
 const { generateDaily, generatePeriod } = await import('../lib/engine.js')
 const { buildDailyReport, buildPeriodReport } = await import('../lib/analyze/report.js')
 const { normalizeConfig } = await import('../lib/config.js')
-const { loadFacts, loadReport } = await import('../lib/store.js')
-const { dayRange } = await import('../lib/util.js')
+const { loadFacts, loadReport, saveFacts } = await import('../lib/store.js')
+const { dayRange, fmtDate, addDays } = await import('../lib/util.js')
 
 const date = '2026-11-10'
 const { start } = dayRange(date)
@@ -63,7 +63,7 @@ test('DAY judges optional discovery in the existing call, with explicit evidence
   const day = calls[1]
   assert.match(day.system, /证据不足.*null/)
   assert.match(day.system, /泛泛建议/)
-  assert.match(day.system, /不要重复.*待办.*成本建议.*健康提醒/)
+  assert.match(day.system, /不要只是复述.*待办.*成本建议.*健康提醒/)
   assert.match(day.messages[0].content[0].text, /手工补上同一份字体配置/)
   assert.match(day.messages[0].content[0].text, /已有待办，不要重复.*\n- 补齐导出回归测试/)
   assert.ok(day.maxTokens >= 400, 'the structured reply has room for both fields')
@@ -209,7 +209,7 @@ test('buildDailyReport reads persisted discovery, defaults missing legacy fields
   assert.equal(buildDailyReport(facts, [], cfg, { discovery: {} }).layer1.discovery, null)
 })
 
-test('local-model DAY works through generateDaily without any cloud fallback, and failures stay null', async () => {
+test('local-model DAY works through generateDaily without any cloud fallback, and a failed rerun keeps the stored finding', async () => {
   let localCalls = 0
   let cloudCalls = 0
   const localCfg = { ...cfg, privacy: 'local-model', localModel: { baseUrl: 'http://127.0.0.1:1/v1', model: 'synthetic' } }
@@ -225,26 +225,45 @@ test('local-model DAY works through generateDaily without any cloud fallback, an
   const out = await generateDaily({ source: source(), cfg: localCfg, llm, fetchImpl }, date)
   assert.equal(out.report.layer1.discovery, discovery)
   assert.equal(localCalls, 2)
+  // The failed call judges nothing, so it must not erase the finding already on disk.
   const failed = await generateDaily({ source: source(), cfg: localCfg, llm, fetchImpl: async () => { throw new Error('offline') } }, date)
-  assert.equal(failed.facts.discovery, null)
-  assert.equal(failed.report.layer1.discovery, null)
-  assert.equal((await loadFacts(date)).discovery, null)
+  assert.equal(failed.facts.discovery, discovery)
+  assert.equal(failed.report.layer1.discovery, discovery)
+  assert.equal((await loadFacts(date)).discovery, discovery)
   assert.equal(cloudCalls, 0)
 })
 
-test('daily local-only regeneration clears an old discovery, including persisted report and facts', async () => {
+test('daily local-only regeneration keeps an old discovery without spending tokens', async () => {
   const mock = model(JSON.stringify({ oneLiner, discovery }))
   await generateDaily({ source: source(), cfg, llm: mock.llm }, date)
   const local = await generateDaily({ source: source(), cfg: { ...cfg, privacy: 'local-only' }, llm: mock.llm }, date)
   assert.equal(local.llmCalls, 0)
   assert.equal(mock.calls.length, 2)
-  assert.equal(local.report.layer1.discovery, null)
-  assert.equal(local.facts.discovery, null)
-  assert.equal((await loadFacts(date)).discovery, null)
+  assert.equal(local.report.layer1.discovery, discovery)
+  assert.equal(local.facts.discovery, discovery)
+  assert.equal((await loadFacts(date)).discovery, discovery)
 })
 
-test('weekly and monthly carryOver preserve IDs from the latest day, retain cap, and add no discovery judgment', async () => {
-  const facts = await collectDay(source(), date)
+test('a rerun that returns null discovery keeps the stored one, and a new finding replaces it', async () => {
+  const first = model(JSON.stringify({ oneLiner, discovery }))
+  await generateDaily({ source: source(), cfg, llm: first.llm }, date)
+  assert.equal((await loadFacts(date)).discovery, discovery)
+
+  const empty = model(JSON.stringify({ oneLiner, discovery: null }))
+  const rerun = await generateDaily({ source: source(), cfg, llm: empty.llm }, date)
+  assert.equal(rerun.facts.discovery, discovery, 'an empty rerun must not erase the stored finding')
+  assert.equal(rerun.report.layer1.discovery, discovery)
+  assert.equal((await loadFacts(date)).discovery, discovery)
+  assert.equal((await loadReport('daily', date)).layer1.discovery, discovery)
+
+  const replacement = '新的发现：同一份导出检查今天重复执行两次，说明可以合并成一条固定命令。'
+  const fresh = model(JSON.stringify({ oneLiner: '又修了一次导出。', discovery: replacement }))
+  const updated = await generateDaily({ source: source(), cfg, llm: fresh.llm }, date)
+  assert.equal(updated.facts.discovery, replacement)
+  assert.equal((await loadFacts(date)).discovery, replacement)
+})
+
+test('weekly and monthly carryOver preserve IDs from the latest day, retain cap, and add no discovery judgment', async () => {  const facts = await collectDay(source(), date)
   facts.discovery = discovery
   facts.carryOver = Array.from({ length: 15 }, (_, i) => ({ text: '合成待办 ' + i, sessionId: 'carry-' + i, title: '合成会话', kind: 'todo' }))
   const previous = { ...facts, date: '2026-11-09', carryOver: [{ text: '旧待办', sessionId: 'older', title: '旧会话', kind: 'todo' }] }
@@ -260,6 +279,18 @@ test('weekly and monthly carryOver preserve IDs from the latest day, retain cap,
   assert.equal((await loadFacts(localDate)).discovery, null)
   assert.equal(local.report.layer1.discovery ?? null, null)
   assert.equal(calls, 0)
+})
+
+test('weekly backfill keeps the discovery already stored for today instead of blanking it', async () => {
+  const today = fmtDate(Date.now())
+  const facts = await collectDay(source(), today)
+  facts.discovery = discovery
+  facts.discoveryLinked = false
+  await saveFacts(facts)
+  let calls = 0
+  await generatePeriod({ source: source(), cfg, llm: { stream() { calls++; throw new Error('unexpected model') } } }, 'weekly', { start: addDays(today, -2), end: today })
+  assert.equal(calls, 0)
+  assert.equal((await loadFacts(today)).discovery, discovery, 'a token-free today refresh must not erase the finding')
 })
 
 test.after(() => rmSync(dir, { recursive: true, force: true }))

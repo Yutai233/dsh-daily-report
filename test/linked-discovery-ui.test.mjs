@@ -92,14 +92,17 @@ test('unavailable plugins hide the entire previously linked discovery across all
   }
 });
 
-test('missing, empty, whitespace and nonstring bodies never leave an orphan marker', () => {
+test('missing, empty, whitespace and nonstring bodies show the placeholder and never an orphan marker', () => {
   for (const discovery of [undefined, null, '', '  ', '\n\t', 0, {}, []]) {
     for (const discoveryLinked of [true, false, undefined]) {
       const result = surfaces({ discovery, discoveryLinked, bili: available });
-      assert.equal(result.discovery, undefined);
-      assert.doesNotMatch(content(result.tree), /每日发现|插件联动/);
-      assert.doesNotMatch(result.html, /<aside class="discovery"|插件联动/);
-      assert.doesNotMatch(result.md, /每日发现|插件联动/);
+      assert.ok(result.discovery);
+      assert.match(content(result.tree), /每日发现：当天没有什么发现喵~/);
+      assert.doesNotMatch(content(result.tree), /插件联动/);
+      assert.match(result.html, /<aside class="discovery" aria-label="每日发现"><p><b>每日发现：<\/b>当天没有什么发现喵~<\/p><\/aside>/);
+      assert.doesNotMatch(result.html, /插件联动/);
+      assert.match(result.md, /^\*\*每日发现：\*\*当天没有什么发现喵~$/m);
+      assert.doesNotMatch(result.md, /插件联动/);
     }
   }
 });

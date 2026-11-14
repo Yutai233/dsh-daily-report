@@ -47,7 +47,8 @@ test('same DAY request judges ordinary and cross-plugin discovery using whitelis
   assert.match(prompt, /"netSavedTokens":-3000/)
   assert.match(prompt, /"estimated":true/)
   assert.doesNotMatch(prompt, /SECRET-PRIVATE-PATH|正文秘密不得上传/)
-  assert.match(day.system, /60~120 字/)
+  assert.match(day.system, /40~60 字即可/)
+  assert.match(day.system, /最长 200 字/)
   assert.match(day.system, /不足以断言.*由压缩导致/)
   assert.match(day.system, /不强制写联动/)
   assert.doesNotMatch(calls[0].system, /插件联动/)
@@ -104,9 +105,11 @@ test('generateDaily persists linked provenance without adding a completion', asy
   assert.equal((await loadFacts(date)).discoveryLinked, true)
   assert.equal((await loadReport('daily', date)).layer1.discoveryLinked, true)
   assert.equal(out.llmCalls, 2)
+  // A token-free rerun judges nothing: it keeps the stored finding (and its
+  // provenance) instead of blanking the card, while bili evidence is still read.
   const local = await generateDaily({ source: source(), cfg: { ...cfg, privacy: 'local-only' }, readBiliDay: async () => bili() }, date)
-  assert.equal(local.facts.discoveryLinked, false)
-  assert.equal(local.report.layer1.discovery, null)
+  assert.equal(local.facts.discoveryLinked, true)
+  assert.equal(local.report.layer1.discovery, linked)
 })
 
 test('report construction and archived enrichment hide stale linked text but retain ordinary discovery', async () => {

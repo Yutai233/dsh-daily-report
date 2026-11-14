@@ -121,11 +121,17 @@ test('discovery follows the overview only when present; session controls are DSH
   assert.doesNotMatch(renderHtml(r, { sessionLinks: true, redact: true }), /<button/);
   assert.match(renderMarkdown(r), /^\*\*每日发现：\*\*发现 &lt;script&gt;重复手工校验&lt;\/script&gt; 可以合并$/m);
   assert.match(renderMarkdown(r), /会话 ID：source-1/);
+  // A null judgement keeps the slot and swaps in the placeholder; the data stays null.
   for (const discovery of [null, undefined, '', '  ']) {
     r.layer1.discovery = discovery;
-    assert.doesNotMatch(renderHtml(r), /<aside class="discovery"/);
-    assert.doesNotMatch(renderMarkdown(r), /\*\*每日发现：\*\*/);
+    assert.match(renderHtml(r), /<aside class="discovery" aria-label="每日发现"><p><b>每日发现：<\/b>当天没有什么发现喵~<\/p><\/aside>/);
+    assert.match(renderMarkdown(r), /^\*\*每日发现：\*\*当天没有什么发现喵~$/m);
+    assert.doesNotMatch(renderHtml(r), /插件联动/);
   }
+  r.layer1.discovery = null
+  r.kind = 'weekly'
+  assert.doesNotMatch(renderHtml(r), /每日发现/);
+  assert.doesNotMatch(renderMarkdown(r), /每日发现/);
 });
 
 test('festival pill renders only on festival days, with escaped content', () => {

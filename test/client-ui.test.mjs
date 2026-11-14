@@ -340,10 +340,12 @@ test('morning card adds inline session buttons only for known sources and condit
   const discoveryNode = nodes(tree).filter(n => n.props.className === 'ddr-discovery')[0];
   assert.equal(discoveryNode.children[0].children[0], '每日发现：');
   assert.equal(discoveryNode.children[1], card.layer1.discovery);
+  // A null judgement keeps the line and shows the placeholder instead of hiding it.
   for (const value of [null, undefined, '', '   ']) {
     card.layer1.discovery = value;
     tree = render(api.MorningCard, { store, anchorRef: {}, onClose() {} });
-    assert.doesNotMatch(text(tree), /每日发现/);
+    assert.match(text(tree), /每日发现：\s*当天没有什么发现喵~/);
+    assert.equal(nodes(tree).filter(n => n.props.className === 'ddr-discovery-more').length, 0);
   }
 });
 

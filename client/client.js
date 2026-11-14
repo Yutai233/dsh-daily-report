@@ -168,6 +168,8 @@ const CUBE_STEP_MS = 3000;
 const CUBE_HOLD_MS = 2400;
 // 卡片里的每日发现只放开头这些字，剩下的交给「详细内容→」跳进完整报告去读。
 const DISCOVERY_PREVIEW_CHARS = 60;
+// 模型判定“当天没什么可展示”时也保留这一行，避免发现栏突然消失。
+const DISCOVERY_EMPTY_TEXT = '当天没有什么发现喵~';
 
 /** Clicking a cuboid turns it now instead of waiting out the remaining hold:
  * seek to the next .6s turn window inside the running CSS animation. */
@@ -490,7 +492,7 @@ function MorningCard({ store, anchorRef, onClose }) {
   const alertItems = (l1 && l1.alerts) || [];
   // 每日发现：卡片只显示前 60 字（含省略号），全文留在报告里，由「详细内容→」跳过去。
   const discovery = typeof l1.discovery === 'string' ? l1.discovery.trim() : '';
-  const discoveryCut = discovery.length > DISCOVERY_PREVIEW_CHARS ? discovery.slice(0, DISCOVERY_PREVIEW_CHARS - 1) + '…' : discovery;
+  const discoveryCut = discovery.length > DISCOVERY_PREVIEW_CHARS ? discovery.slice(0, DISCOVERY_PREVIEW_CHARS - 1) + '…' : discovery || DISCOVERY_EMPTY_TEXT;
   const discoveryMore = discovery.length > DISCOVERY_PREVIEW_CHARS
     ? h('button', { type: 'button', className: 'ddr-discovery-more', 'aria-label': '在完整报告里查看每日发现', onClick: (e) => store.view('daily', card.key, 'DSH 每日简报 · ' + card.label, e.currentTarget, 'discovery') }, '详细内容→')
     : null;
@@ -520,9 +522,9 @@ function MorningCard({ store, anchorRef, onClose }) {
       alertItems.length || usageNode ? h('div', { className: 'ddr-alerts' },
         alertNode,
         usageNode) : null,
-      typeof l1.discovery === 'string' && l1.discovery.trim() && (l1.discoveryLinked !== true || l1.bili)
+      (!discovery || l1.discoveryLinked !== true || l1.bili)
         ? h('aside', { className: 'ddr-discovery', 'aria-label': '每日发现' }, h('b', null, '每日发现：'), discoveryCut,
-          l1.discoveryLinked === true ? h('span', { className: 'ddr-discovery-linked' }, '插件联动') : null,
+          discovery && l1.discoveryLinked === true ? h('span', { className: 'ddr-discovery-linked' }, '插件联动') : null,
           discoveryMore) : null,
       (l1.festival || (card.carryOver && card.carryOver.length)) ? h('div', { className: 'ddr-carry' },
         l1.festival

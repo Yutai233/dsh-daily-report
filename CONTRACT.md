@@ -286,11 +286,13 @@ export function renderMarkdown(report) → string
 ## 6. 断点续工与每日发现
 
 - 日报、周报、月报的 `sections.carryOver[]` 保留采集器给出的 `sessionId`；老报告没有 ID 时不伪造目的地。卡片与 DSH 内完整报告在正文后显示「相关会话」按钮，通过 `uiWorkspace.openSession(sessionId)` 原生导航；失败留在原界面并显示错误。
-- `summarizeDay()` 返回 `{ oneLiner, discovery, discoveryLinked, mode, llmCalls }`。现有 DAY 请求合并生成 JSON `{ "oneLiner": "…", "discovery": null|string, "discoveryLinked": boolean }`，不增加模型请求次数；有具体依据且有新意才写发现，禁止为了填空重复摘要、待办、成本或健康提醒。发现清理后最多 240 字（提示词要求 60~120 字、最多 200 字，240 只在模型超长时兜底；不含独立标签）。
+- `summarizeDay()` 返回 `{ oneLiner, discovery, discoveryLinked, mode, llmCalls }`。现有 DAY 请求合并生成 JSON `{ "oneLiner": "…", "discovery": null|string, "discoveryLinked": boolean }`，不增加模型请求次数；有具体依据且有新意才写发现，禁止为了填空重复摘要、待办、成本或健康提醒。长度只是建议而非门槛：一句话（约 40 字）够具体就写，60~120 字更好，最多 200 字；发现清理后最多 240 字兜底（不含独立标签），不会因为写不到 60 字就被判成 null。
 - 仅 bili/context 双运行且有同日有效数字账本时，向原 DAY 请求加入白名单聚合数值供模型判断跨插件异常解释；不上传原始插件文字、路径、ID、正文、摘要或 handoff。沿用用户摘要模式，不开启额外云调用。证据不足不生成联动发现，缺测不等于异常，相关性不能擅写因果；普通发现仍可被选中。
 - `facts.discoveryLinked` → `report.layer1.discoveryLinked` 仅严格布尔 `true` 代表模型实际采用了可用联动证据。有正文、标志为真且 `layer1.bili` 可用时，卡片/HTML 段末加淡蓝半透明圆角标签“插件联动”（Markdown 为括注）；无插件时不展示历史联动正文或标签，普通发现不受影响。重看归档不补做模型判断。
-- `facts.discovery` 与 `report.layer1.discovery` 为 `string|null`，旧字段缺失视为 null。仅统计、无可用模型、模型失败、格式错误或没有值得展示的内容时不生成模板发现。周期回填不调用模型生成发现。
-- 卡片、HTML 与 Markdown 在总览下、明日待续上方按需显示发现，标签与正文合并为一行（`每日发现：正文`）；空值时整块省略。卡片只显示正文前 60 字（59 字 + `…`）；被截断时在行内追加圆角按钮「详细内容→」（`aria-label="在完整报告里查看每日发现"`），点击调用 `view('daily', card.key, …)` 并把 `focus: 'discovery'` 带进查看器，查看器在 frame 内把视图滚到报告里 `.discovery` 段落起点；正文不超过 60 字时不出现按钮。
+- `facts.discovery` 与 `report.layer1.discovery` 为 `string|null`，旧字段缺失视为 null；**数据本身保持 null**，占位文案只存在于渲染层。仅统计、无可用模型、模型失败、格式错误或没有值得展示的内容时不生成模板发现。周期回填不调用模型生成发现。
+- 日报（`kind !== 'weekly' && kind !== 'monthly'`）的发现栏始终存在：有正文时照常显示正文，空值时显示占位文案「当天没有什么发现喵~」（不带「插件联动」标签、不带「详细内容→」按钮）。实现细节：`lib/util.js` 导出 `DISCOVERY_EMPTY_TEXT`，`lib/render/html.js`、`lib/render/markdown.js` 与客户端卡片都只做展示替换。曾由模型联动、但当前插件不可用的 `discoveryLinked` 正文仍整块隐藏，不被占位替换。
+- 重新生成不擦除已有发现：`generateDaily()` 在本轮模型返回 `null`（或本次根本没做模型判断，如 local-only、调用失败）而同日 facts 已存有 discovery 时，沿用上一次的正文与 `discoveryLinked`，报告也按沿用的值构建；模型给出新发现时才覆盖。`generatePeriod()` 的「今日刷新」同样保留已存发现。这样重复生成、失败重试或周末回填都不会让卡片和报告里的发现突然消失。
+- 卡片、HTML 与 Markdown 在总览下、明日待续上方显示发现，标签与正文合并为一行（`每日发现：正文`）。卡片只显示正文前 60 字（59 字 + `…`）；被截断时在行内追加圆角按钮「详细内容→」（`aria-label="在完整报告里查看每日发现"`），点击调用 `view('daily', card.key, …)` 并把 `focus: 'discovery'` 带进查看器，查看器在 frame 内把视图滚到报告里 `.discovery` 段落起点；正文不超过 60 字时不出现按钮。
 - 焦点滚动的脚本与点击桥共用同一个 nonce：有会话时可执行，没有会话的日报也允许这一条 nonce 脚本（CSP 仍为 `default-src 'none'`），其它脚本、内联事件与网络资源保持禁止；`focus` 缺省时查看器仍从报告顶部打开。
 - `renderHtml(report, { redact = false, sessionLinks = false })` 仍输出无脚本的单文件。仅 DSH 的 generate/report RPC 以 `sessionLinks:true` 输出按钮，并向客户端提供结构化来源白名单。导出的 HTML 不显示无效按钮，Markdown 留存会话 ID。
 - 无可跳转会话的查看器继续使用 `sandbox=""`。交互报告只授权 `allow-scripts`（不允许 same-origin、弹窗、表单或顶层导航），CSP 仅允许随机 nonce 的可信点击桥；原报告脚本、内联事件及网络资源保持禁止。父页只接受当前 iframe、当前报告、匹配 token 且在结构化会话白名单内的消息；桥只处理真实用户点击/键盘激活。
