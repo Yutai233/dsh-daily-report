@@ -21,6 +21,8 @@ const assertEq = (actual, expected, label) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const at = (y, mo, d, h = 0, mi = 0) => new Date(y, mo - 1, d, h, mi).getTime()
+// 峰时/谷时按北京时间判定；构造时间戳固定锚在 UTC+8，避免断言随 CI 机器时区漂移
+const atBj = (y, mo, d, h = 0, mi = 0) => Date.UTC(y, mo - 1, d, h - 8, mi)
 
 // ---------------------------------------------------------------------------
 console.log('[1] heartbeat: readHostDay 手写 jsonl（含跨午夜）')
@@ -262,7 +264,7 @@ console.log('[4] weather: fetchWeather / geocode（注入假 fetch）')
 // ---------------------------------------------------------------------------
 console.log('[5] cost: costOf / isOffpeak（工作日峰时 + 周末/节假日谷时 + Pro 三倍）')
 {
-  const weekday = (h, mi) => at(2026, 11, 12, h, mi) // 周四
+  const weekday = (h, mi) => atBj(2026, 11, 12, h, mi) // 周四
   const peak = weekday(10, 0)
   const offpeak = weekday(3, 0)
 
@@ -295,19 +297,19 @@ console.log('[5] cost: costOf / isOffpeak（工作日峰时 + 周末/节假日�
   assertEq(isOffpeak(undefined), false, 'isOffpeak(undefined) = false')
 
   // 周末（11/14 周六、11/15 周日）与法定节假日（10/5 周一 国庆、1/1 元旦）全天谷价
-  assertEq(isOffpeak(at(2026, 11, 14, 10, 0)), true, '周六 10:00 为谷时')
-  assertEq(isOffpeak(at(2026, 11, 15, 15, 0)), true, '周日 15:00 为谷时')
-  assertEq(isOffpeak(at(2026, 10, 5, 10, 0)), true, '国庆假期 10:00 为谷时')
-  assertEq(isOffpeak(at(2026, 1, 1, 10, 0)), true, '元旦 10:00 为谷时')
-  assertEq(costOf({ outputTokens: 1000000 }, DEFAULT_PRICING, at(2026, 11, 14, 10, 0)), 4, '周六输出 1M = ¥4')
+  assertEq(isOffpeak(atBj(2026, 11, 14, 10, 0)), true, '周六 10:00 为谷时')
+  assertEq(isOffpeak(atBj(2026, 11, 15, 15, 0)), true, '周日 15:00 为谷时')
+  assertEq(isOffpeak(atBj(2026, 10, 5, 10, 0)), true, '国庆假期 10:00 为谷时')
+  assertEq(isOffpeak(atBj(2026, 1, 1, 10, 0)), true, '元旦 10:00 为谷时')
+  assertEq(costOf({ outputTokens: 1000000 }, DEFAULT_PRICING, atBj(2026, 11, 14, 10, 0)), 4, '周六输出 1M = ¥4')
   // 2026-11-13 周五仍按工作日
-  assertEq(isOffpeak(at(2026, 11, 13, 10, 0)), false, '周五 10:00 为峰时')
+  assertEq(isOffpeak(atBj(2026, 11, 13, 10, 0)), false, '周五 10:00 为峰时')
 }
 
 // ---------------------------------------------------------------------------
 console.log('[6] cost: analyzeCost')
 {
-  const t = (h, mi) => at(2026, 11, 12, h, mi)
+  const t = (h, mi) => atBj(2026, 11, 12, h, mi)
   const facts = {
     totals: {
       costCny: 1.0,
