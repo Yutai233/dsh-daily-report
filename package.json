@@ -1,6 +1,6 @@
 {
   "name": "dsh-daily-report",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "DSH 每日简报：会话摘要、工具统计、三层 HTML 日报、dsh 启停心跳、天气、7 日对比、成本建议、键鼠空闲健康提醒、周报/月报；欢迎页 logo 上方弹出早晨卡片。",
   "type": "module",
   "main": "lib/index.js",

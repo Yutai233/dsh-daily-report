@@ -3,7 +3,7 @@
 把本机的 DSH 会话整理成一份能快速读完的简报：今天做了哪些事、用了多少 token、花了多少钱、哪里卡住、明天接着做什么，外加天气、dsh 启停时间和作息提醒。
 
 [![CI](https://github.com/Yutai233/dsh-daily-report/actions/workflows/ci.yml/badge.svg)](https://github.com/Yutai233/dsh-daily-report/actions/workflows/ci.yml)
-![version](https://img.shields.io/badge/version-0.3.4-blue)
+![version](https://img.shields.io/badge/version-0.3.5-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![dsh](https://img.shields.io/badge/dsh-%E2%89%A5%200.2.2--rc.1-4A4AFF)
 ![node](https://img.shields.io/badge/node-%E2%89%A5%2022.15-339933)
