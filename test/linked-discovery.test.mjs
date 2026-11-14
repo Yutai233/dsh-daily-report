@@ -47,7 +47,7 @@ test('same DAY request judges ordinary and cross-plugin discovery using whitelis
   assert.match(prompt, /"netSavedTokens":-3000/)
   assert.match(prompt, /"estimated":true/)
   assert.doesNotMatch(prompt, /SECRET-PRIVATE-PATH|正文秘密不得上传/)
-  assert.match(day.system, /不超过 60 字/)
+  assert.match(day.system, /60~120 字/)
   assert.match(day.system, /不足以断言.*由压缩导致/)
   assert.match(day.system, /不强制写联动/)
   assert.doesNotMatch(calls[0].system, /插件联动/)
@@ -76,9 +76,12 @@ test('missing, unmeasured or wrong-day plugin data cannot enable linked discover
   assert.equal(result.discovery, ordinary)
 })
 
-test('linked discovery retains the existing 60 character cap and duplicate suppression', async () => {
+test('linked discovery keeps complete wording, trims only runaway output and suppresses duplicates', async () => {
+  const complete = await run({ oneLiner: '继续校验。', discovery: linked, discoveryLinked: true })
+  assert.equal(complete.result.discovery, linked)
+  assert.equal(complete.result.discoveryLinked, true)
   const { result } = await run({ oneLiner: '继续校验。', discovery: linked.repeat(8), discoveryLinked: true })
-  assert.ok(result.discovery.length <= 60)
+  assert.equal(result.discovery.length, 240)
   assert.ok(result.discovery.endsWith('…'))
   assert.equal(result.discoveryLinked, true)
   const duplicate = await run({ oneLiner: linked, discovery: linked, discoveryLinked: true })

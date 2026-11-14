@@ -260,14 +260,16 @@ export function analyzeHealth(facts, { enabled, sitLimitMin = 50, lateHour = 23,
 
 ### 可选 bili 联动（仅日报）
 
-- `facts.bili` → `report.layer1.bili`：`{ source:'billion-context', date, compressionCount, reclaimedTokens, inputTokens, cachedTokens, cacheHitRate, netSavedTokens, status, anomalies, coverage?, estimated? } | null`；所有计量缺失用 `null`，不填假 0、不回退为累计数。
+- `facts.bili` → `report.layer1.bili`：`{ source:'billion-context', date, compressionCount, reclaimedTokens, inputTokens, cachedTokens, cacheHitRate, netSavedTokens, totalNetSavedTokens, totalGrossSavedTokens, status, anomalies, coverage?, estimated? } | null`；所有计量缺失用 `null`，不填假 0；当日值不回退为累计数，累计另给字段（见下）。
 - 只在 **dsh-context 运行中 + 本机 bili 活跃实例** 均可确认时启用；包已安装但未运行不算可用。用户设置里的 `links.context` / `links.bili`（默认 `true`）是同意开关：任一为 `false` 时 `readBiliDay` 直接返回 `null`，不读账本，`layer1.bili` 为 `null`，小卡片不显示 bili 面、发现不带联动标签。旧报告读取时可补本地元数据，不重新调用模型、不改隐私设置。卸载/停用后不展示归档遗留的可选字段。
 - 仅从 bili SQLite 只读投影会话映射与 `cacheLedger` 数值字段，按报告会话 ID 和本地日期过滤；不读取正文、摘要、handoff、工具参数或其他插件详情接口。Worker 有超时、行数及内存上限，兼容性失败静默降级。
 - `reclaimedTokens` 是当日压缩事件窗口回收量，不是净节省；`cacheHitRate = cachedTokens / inputTokens` 按 token 加权，范围为 0–1，零分母或覆盖不足未知。原用量/费用总计不加减 bili 统计，避免重复记账。
 - 部分覆盖不整日作废：bili 从未记录的会话、缺少版本化账本的会话计入 `coverage` 缺口（如 `9/11 会话可核算（部分会话尚无 bili 映射），其余未计入`），其余可核算会话照常给出四项指标，因而不计入的会话使数值成为当日下界。会话内部的问题（历史不完整、账本冲突、缓存用量未测量）仍只把对应指标置 `null`；一个可核算会话都没有时才全部 `null`。覆盖说明排在 `coverage` 首位，避免 240 字截断后丢失。
 - `netSavedTokens` 只接受可核对且完整归属于本日的 bili fold 账本净收益：`max(0,S-sigma)*requestsAfter-T-sigma`；跨日/继承/不完整账本无法归属时为 `null`，不拿窗口回收量冒充。保留负数。bili 自身的摘要 token 估算通过 `estimated:true` 显式传递，前端标“约”，不声称账单实测节约。
+- `totalNetSavedTokens` / `totalGrossSavedTokens` 是**本地账本全部会话的累计值**，与 bili-c 面板「净节省 / 压缩累计节省」同口径：`avoided=(S-sigma)*requestsAfter`，`gross=Σavoided`，`net=Σ(avoided-T-sigma)`，不按日切分、不依赖当天的会话映射（当天没有映射也能给出）。任一 fold 数值字段不是非负数、账本行超过安全上限或读取失败时两者均为 `null`，不用部分数据冒充累计。累计为负时 `normalizeBili` 置 `status:'warning'` 并记录异常。原用量/费用总计仍不加减累计值。
 - HTML 第一层 `details.spark` 默认收起，有统计时原 summary 提示“bili 收益”，卡在原图表之前，恰好四项：压缩次数、窗口回收量、缓存命中率、异常状态。异常原因在第四项内可见，数据不全显示待确认而非无异常。Markdown 同口径。
-- 小卡片只在 `netSavedTokens` 为有限正数时加入长方体相邻第二面“bili-c节省[约]XXX”；0/负/未知保留原用量。动画为 10 秒周期，hover/focus/busy/viewer/页面隐藏时复位完整第一面；减少动态时静态同行呈现两值。装饰面 `aria-hidden`，单一组提供完整可访问说明。
+- 小卡片用量面与 bili 面组成四面棱柱（两值各两张，朝同一方向循环）：优先显示累计 `totalNetSavedTokens`，文案“bili-c净省[约]X tokens”（累计为负写“bili-c净增”），累计值用 bili-c 面板自己的 K/M/B 写法、与面板逐位一致；缺失或为 0 时回落到当日 `netSavedTokens` 正数，文案“bili-c当天净省[约]X tokens”（当日值仍用中文万/亿）；都不可用则保留原用量单面。累计口径在 `aria-label` 里标注“面板「净节省」，理论上界：每次折叠的节省 × 其后每个请求累计”。每 3 秒翻一个 90° 台阶、12 秒走完一圈，方向始终向上，0° 与 360° 同相不回翻；点击可提前翻到下一面（把动画 seek 到下一段 0.6 秒翻面的起点；翻面正在进行时不打断，负延迟先折算成动画本地时间再找台阶）。不使用 hover 冻结、不使用任何 `title` 悬浮说明；`data-paused`（弹窗打开/忙）与页面隐藏时复位到第一面，减少动态时静态同行呈现两值。装饰面 `aria-hidden`，单一组通过 `aria-label` 提供完整可访问说明（用量、涨跌、花费与 bili 口径）。
+- `layer1.alerts` 有 2 条时并成一个告警棱柱（窄屏最多两三条时同理，按顺序填满 4 个面、超出部分循环），与用量并排在同一行：整条胶囊宽度取最宽的一条，每 3 秒换一条，方向与节奏同用量棱柱但延迟半个台阶；点击同样提前翻面（同一套 seek 规则）。胶囊底色与各面填充色取同一个 `--ddr-alert-fill`（告警色 10% 叠在卡片底色上），翻面时只有文字在转，橙色圆角矩形本身不跟着转、宽度也不随文字长短变化。只有 1 条告警时仍是静态胶囊。减弱动效或浏览器不支持 `preserve-3d` 时展开成并排静态胶囊（重复面标 `is-duplicate` 并隐藏）。
 
 ## 5. 渲染器
 ```js
@@ -284,10 +286,11 @@ export function renderMarkdown(report) → string
 ## 6. 断点续工与每日发现
 
 - 日报、周报、月报的 `sections.carryOver[]` 保留采集器给出的 `sessionId`；老报告没有 ID 时不伪造目的地。卡片与 DSH 内完整报告在正文后显示「相关会话」按钮，通过 `uiWorkspace.openSession(sessionId)` 原生导航；失败留在原界面并显示错误。
-- `summarizeDay()` 返回 `{ oneLiner, discovery, discoveryLinked, mode, llmCalls }`。现有 DAY 请求合并生成 JSON `{ "oneLiner": "…", "discovery": null|string, "discoveryLinked": boolean }`，不增加模型请求次数；有具体依据且有新意才写发现，禁止为了填空重复摘要、待办、成本或健康提醒。发现清理后最多 60 字（不含独立标签）。
+- `summarizeDay()` 返回 `{ oneLiner, discovery, discoveryLinked, mode, llmCalls }`。现有 DAY 请求合并生成 JSON `{ "oneLiner": "…", "discovery": null|string, "discoveryLinked": boolean }`，不增加模型请求次数；有具体依据且有新意才写发现，禁止为了填空重复摘要、待办、成本或健康提醒。发现清理后最多 240 字（提示词要求 60~120 字、最多 200 字，240 只在模型超长时兜底；不含独立标签）。
 - 仅 bili/context 双运行且有同日有效数字账本时，向原 DAY 请求加入白名单聚合数值供模型判断跨插件异常解释；不上传原始插件文字、路径、ID、正文、摘要或 handoff。沿用用户摘要模式，不开启额外云调用。证据不足不生成联动发现，缺测不等于异常，相关性不能擅写因果；普通发现仍可被选中。
 - `facts.discoveryLinked` → `report.layer1.discoveryLinked` 仅严格布尔 `true` 代表模型实际采用了可用联动证据。有正文、标志为真且 `layer1.bili` 可用时，卡片/HTML 段末加淡蓝半透明圆角标签“插件联动”（Markdown 为括注）；无插件时不展示历史联动正文或标签，普通发现不受影响。重看归档不补做模型判断。
 - `facts.discovery` 与 `report.layer1.discovery` 为 `string|null`，旧字段缺失视为 null。仅统计、无可用模型、模型失败、格式错误或没有值得展示的内容时不生成模板发现。周期回填不调用模型生成发现。
-- 卡片、HTML 与 Markdown 在总览下、明日待续上方按需显示发现，标签与正文合并为一行（`每日发现：正文`）；空值时整块省略。
+- 卡片、HTML 与 Markdown 在总览下、明日待续上方按需显示发现，标签与正文合并为一行（`每日发现：正文`）；空值时整块省略。卡片只显示正文前 60 字（59 字 + `…`）；被截断时在行内追加圆角按钮「详细内容→」（`aria-label="在完整报告里查看每日发现"`），点击调用 `view('daily', card.key, …)` 并把 `focus: 'discovery'` 带进查看器，查看器在 frame 内把视图滚到报告里 `.discovery` 段落起点；正文不超过 60 字时不出现按钮。
+- 焦点滚动的脚本与点击桥共用同一个 nonce：有会话时可执行，没有会话的日报也允许这一条 nonce 脚本（CSP 仍为 `default-src 'none'`），其它脚本、内联事件与网络资源保持禁止；`focus` 缺省时查看器仍从报告顶部打开。
 - `renderHtml(report, { redact = false, sessionLinks = false })` 仍输出无脚本的单文件。仅 DSH 的 generate/report RPC 以 `sessionLinks:true` 输出按钮，并向客户端提供结构化来源白名单。导出的 HTML 不显示无效按钮，Markdown 留存会话 ID。
 - 无可跳转会话的查看器继续使用 `sandbox=""`。交互报告只授权 `allow-scripts`（不允许 same-origin、弹窗、表单或顶层导航），CSP 仅允许随机 nonce 的可信点击桥；原报告脚本、内联事件及网络资源保持禁止。父页只接受当前 iframe、当前报告、匹配 token 且在结构化会话白名单内的消息；桥只处理真实用户点击/键盘激活。

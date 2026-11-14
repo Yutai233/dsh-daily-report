@@ -69,7 +69,7 @@ function makeStore(connection, navigateSession) {
       if (Object.prototype.hasOwnProperty.call(cfg, 'reportsDir')) await refresh({ withSize: true });
       return v.config;
     },
-    async view(kind, key, title, trigger) {
+    async view(kind, key, title, trigger, focus) {
       const request = ++viewRequest;
       const origin = captureViewerOrigin(trigger);
       publish({ error: null });
@@ -77,7 +77,7 @@ function makeStore(connection, navigateSession) {
         const v = await call('report', { kind, key });
         if (!alive || request !== viewRequest) return;
         if (!v || typeof v.html !== 'string' || !v.html.trim()) throw new Error('报告内容为空，请重新生成后再试。');
-        publish({ viewer: { id: request, title: title || key, html: v.html, kind, key, origin, sessionIds: reportSessionIds(v.report || v.card) } });
+        publish({ viewer: { id: request, title: title || key, html: v.html, kind, key, origin, focus: focus || null, sessionIds: reportSessionIds(v.report || v.card) } });
       } catch (e) { if (alive && request === viewRequest) publish({ error: '无法查看报告：' + String(e.message || e) }); }
     },
     async open(kind, key, format) {
@@ -132,6 +132,16 @@ function formatBiliTokens(n) {
   return String(Math.round(n));
 }
 
+/** bili-c 面板自己的写法（K/M/B，逐位取整规则相同）；累计净省照抄面板才不会读成两个数。 */
+function formatBiliPanelTokens(n) {
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e4) return Math.round(n / 1e3) + 'K';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(Math.round(n));
+}
+
 /** Hidden pages do not spend animation frames; unmount always removes the listener. */
 function bindTokenCubeVisibility(node) {
   if (!node) return;
@@ -139,6 +149,30 @@ function bindTokenCubeVisibility(node) {
   sync();
   document.addEventListener('visibilitychange', sync);
   return () => document.removeEventListener('visibilitychange', sync);
+}
+
+// Each 3s step holds a face for 2.4s and spends .6s turning 90° upward; the
+// animation walks 0→360° so it never unwinds backwards.
+const CUBE_STEP_MS = 3000;
+const CUBE_HOLD_MS = 2400;
+// 卡片里的每日发现只放开头这些字，剩下的交给「详细内容→」跳进完整报告去读。
+const DISCOVERY_PREVIEW_CHARS = 60;
+
+/** Clicking a cuboid turns it now instead of waiting out the remaining hold:
+ * seek to the next .6s turn window inside the running CSS animation. */
+function advanceTokenCube(event) {
+  const rotor = event?.currentTarget?.querySelector?.('.dr-token-cube__rotor, .dr-alert-cube__rotor');
+  const [animation] = rotor?.getAnimations?.() || [];
+  const now = animation ? Number(animation.currentTime) : NaN;
+  if (!Number.isFinite(now)) return; // paused/hidden/reduced-motion: nothing to advance
+  // 负延迟（告警胶囊错开半个台阶）不体现在 currentTime 里，先换算成动画本地时间再找台阶，
+  // 否则会把视图直接 seek 到某一面的停留段，看起来像“文字瞬间变了”。
+  const delay = Number(animation.effect?.getTiming?.().delay) || 0;
+  const local = now - delay;
+  const turn = CUBE_HOLD_MS + CUBE_STEP_MS * Math.floor((local - CUBE_HOLD_MS) / CUBE_STEP_MS);
+  const turnMs = CUBE_STEP_MS - CUBE_HOLD_MS;
+  if (local >= turn && local < turn + turnMs) return; // 正在翻面，让它把这 0.6s 转完
+  animation.currentTime = (turn > local ? turn : turn + CUBE_STEP_MS) + delay;
 }
 
 /** Capture before any RPC await; DOMRects themselves must not be kept live. */
@@ -237,10 +271,15 @@ function reportSessionIds(report) {
 }
 
 /** Isolated iframe bridge: no same-origin, popup, form or top-navigation powers. */
-function reportFrameHtml(html, theme, token, interactive) {
-  const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'" + (interactive ? "; script-src 'nonce-" + token + "'" : '');
+function reportFrameHtml(html, theme, token, interactive, focus) {
+  // 焦点跳转只需要我们自己的 nonce 脚本；会话桥仍然只给带会话的报告。
+  const reveal = focus === 'discovery';
+  const scriptable = interactive || reveal;
+  const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; base-uri 'none'; form-action 'none'" + (scriptable ? "; script-src 'nonce-" + token + "'" : '');
   const bridge = interactive ? '<script nonce="' + token + '">document.addEventListener("click",function(e){if(!e.isTrusted)return;var b=e.target.closest("button[data-ddr-session]");if(!b)return;e.preventDefault();parent.postMessage({type:"ddr-open-session",token:"' + token + '",sessionId:b.getAttribute("data-ddr-session")},"*")});</script>' : '';
-  return '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="' + policy + '">' + bridge + '</head><body>' + html.replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh\b[^>]*>/gi, '') + '<style>' + theme + '</style></body></html>';
+  // 「详细内容→」从卡片跳进报告时，直接停在每日发现那一段；滚动只发生在 frame 内部。
+  const jump = reveal ? '<script nonce="' + token + '">addEventListener("load",function(){requestAnimationFrame(function(){var el=document.querySelector(".discovery");if(el)el.scrollIntoView({block:"start",behavior:"auto"});});});</script>' : '';
+  return '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="' + policy + '">' + bridge + jump + '</head><body>' + html.replace(/<meta\b[^>]*http-equiv\s*=\s*["']?refresh\b[^>]*>/gi, '') + '<style>' + theme + '</style></body></html>';
 }
 
 /** Validate both the frame identity and the report-specific destination list. */
@@ -394,7 +433,8 @@ function MorningCard({ store, anchorRef, onClose }) {
         (wxWhen || wxData) && wx.tip ? ' · ' : null,
         wx.tip ? h('span', { className: 'ddr-tip' }, wx.tip) : null))
     : null;
-  // 用量只留 tokens 与涨跌幅，和告警胶囊并排；花费挪进 title，免得把这一行撑到第二行。
+  // 用量只留 tokens 与涨跌幅，和告警胶囊并排。悬停不再弹详情、也不再抢回 tokens 面：
+  // 花费与 bili 口径说明放进 aria-label，鼠标点一下可以提前翻到下一面。
   // layer1.usage 是新报告的结构化字段，旧报告退回 sections.usage.rows（无差值，避免语义错位）。
   const l1Usage = (l1 && l1.usage) || null;
   const usageRows = (card && card.usage && card.usage.rows) || null;
@@ -403,28 +443,57 @@ function MorningCard({ store, anchorRef, onClose }) {
   const tokTrend = l1Usage ? l1Usage.trend : null;
   const tokDelta = l1Usage ? l1Usage.delta : null;
   const bili = l1 && l1.bili;
-  const netSaved = bili && bili.netSavedTokens;
-  const showBili = Number.isFinite(netSaved) && netSaved > 0;
-  const netApprox = bili && bili.estimated === true ? '约' : '';
-  const savingText = showBili ? 'bili-c节省' + netApprox + formatBiliTokens(netSaved) : '';
-  const netBasis = netApprox ? '（bili 账本净收益估算，已扣除压缩及摘要开销；非账单实测/非窗口回收量）' : '（已扣除压缩及摘要开销）';
-  const biliTitle = showBili ? 'bili-c净节省' + netApprox + ' ' + formatBiliTokens(netSaved) + ' tokens' + netBasis
-    : Number.isFinite(netSaved) && netSaved < 0 ? 'bili-c净增加' + netApprox + ' ' + formatBiliTokens(-netSaved) + ' tokens（压缩及摘要开销超过节省）'
-    : Number.isFinite(netSaved) && netSaved === 0 ? 'bili-c净节省' + netApprox + ' 0 tokens'
-    : bili ? 'bili-c净节省暂不可用' : '';
-  const usageTitle = '这一天用掉的 token' + (costText ? '，估算花费约 ' + costText : '');
+  const dayNetSaved = bili && bili.netSavedTokens;
+  const totalNetSaved = bili && bili.totalNetSavedTokens;
+  // bili-c 面板「净节省」显示的是全部会话累计值；当天值只在没有累计值时兜底，
+  // 否则弹窗与 bili-c 面板对不上（当天口径还常因账本跨日而为 null）。
+  const useBiliTotal = Number.isFinite(totalNetSaved) && totalNetSaved !== 0;
+  const biliNet = useBiliTotal ? totalNetSaved : dayNetSaved;
+  const showBili = Number.isFinite(biliNet) && (useBiliTotal || biliNet > 0);
+  const netApprox = useBiliTotal || (bili && bili.estimated === true) ? '约' : '';
+  const biliLabel = useBiliTotal ? (biliNet < 0 ? 'bili-c净增' : 'bili-c净省') : 'bili-c当天净省';
+  const biliValue = showBili
+    ? (useBiliTotal ? formatBiliPanelTokens(Math.abs(biliNet)) : formatBiliTokens(Math.abs(biliNet))) + ' tokens'
+    : '';
+  const savingText = showBili ? biliLabel + netApprox + ' ' + biliValue : '';
+  const biliBasis = useBiliTotal
+    ? '（bili-c 面板「净节省」，理论上界：每次折叠的节省 × 其后每个请求累计）'
+    : netApprox ? '（bili 账本净收益估算，已扣除压缩及摘要开销；非账单实测/非窗口回收量）' : '（已扣除压缩及摘要开销）';
   const deltaText = tokTrend && tokDelta ? (tokTrend === 'up' ? '▲' : tokTrend === 'down' ? '▼' : '—') + ' ' + tokDelta : '';
+  const usageAria = tokText + ' tokens' + (deltaText ? '，与前一天相比 ' + deltaText : '') + (costText ? '，估算花费约 ' + costText : '');
+  const ariaLabel = usageAria + (showBili ? '；' + biliLabel + netApprox + ' ' + biliValue + biliBasis : '');
   const usageContents = [h('b', { key: 'tokens' }, tokText + ' tokens'),
-    deltaText ? h('span', { key: 'delta', className: 'ddr-delta ' + tokTrend, title: '与前一天相比' }, deltaText) : null];
-  const usageFace = h('span', { className: 'ddr-usage' }, ...usageContents);
+    deltaText ? h('span', { key: 'delta', className: 'ddr-delta ' + tokTrend }, deltaText) : null];
+  const usageFace = () => h('span', { className: 'ddr-usage' }, ...usageContents);
   useEffect(() => tokText && showBili ? bindTokenCubeVisibility(tokenCubeRef.current) : undefined, [!!tokText, showBili]);
+  // 四面棱柱：tokens / bili 各两张，循环向上翻转；aria-label 一次说清两个数与花费，
+  // 四个面都标 aria-hidden，避免转一圈就被读屏重复播报。
   const usageNode = !tokText ? null : showBili
-    ? h('span', { className: 'dr-token-cube', ref: tokenCubeRef, title: usageTitle + '；' + biliTitle, role: 'group', 'aria-label': tokText + ' tokens' + (deltaText ? '，与前一天相比 ' + deltaText : '') + '；' + biliTitle, 'data-paused': snap.viewer || snap.busy ? 'true' : 'false' },
+    ? h('span', { className: 'dr-token-cube', ref: tokenCubeRef, role: 'group', 'aria-label': ariaLabel, 'data-paused': snap.viewer || snap.busy ? 'true' : 'false', onClick: advanceTokenCube },
       h('span', { className: 'dr-token-cube__rotor', 'aria-hidden': true },
-        h('span', { className: 'dr-token-cube__face dr-token-cube__face--usage' }, usageFace),
-        h('span', { className: 'dr-token-cube__face dr-token-cube__face--bili' }, savingText)))
-    : h('span', { className: 'ddr-usage', title: usageTitle + (biliTitle ? '；' + biliTitle : '') }, ...usageContents);
+        h('span', { className: 'dr-token-cube__face dr-token-cube__face--usage' }, usageFace()),
+        h('span', { className: 'dr-token-cube__face dr-token-cube__face--bili' }, savingText),
+        h('span', { className: 'dr-token-cube__face dr-token-cube__face--usage-back' }, usageFace()),
+        h('span', { className: 'dr-token-cube__face dr-token-cube__face--bili-back' }, savingText)))
+    : h('span', { className: 'ddr-usage', 'aria-label': ariaLabel }, ...usageContents);
   const alertItems = (l1 && l1.alerts) || [];
+  // 每日发现：卡片只显示前 60 字（含省略号），全文留在报告里，由「详细内容→」跳过去。
+  const discovery = typeof l1.discovery === 'string' ? l1.discovery.trim() : '';
+  const discoveryCut = discovery.length > DISCOVERY_PREVIEW_CHARS ? discovery.slice(0, DISCOVERY_PREVIEW_CHARS - 1) + '…' : discovery;
+  const discoveryMore = discovery.length > DISCOVERY_PREVIEW_CHARS
+    ? h('button', { type: 'button', className: 'ddr-discovery-more', 'aria-label': '在完整报告里查看每日发现', onClick: (e) => store.view('daily', card.key, 'DSH 每日简报 · ' + card.label, e.currentTarget, 'discovery') }, '详细内容→')
+    : null;
+  // 多条告警合成一个棱柱，按同一套 3s 台阶轮流露出，宽度只占最宽的那条，
+  // 于是告警胶囊和用量能排进同一行。四个面按顺序填，最多展示前四条（超出的告警
+  // 本来也需要点开简报才看得全）。静态降级时 is-duplicate 的面会被隐藏。
+  const alertNode = alertItems.length > 1
+    ? h('span', { className: 'dr-alert-cube', role: 'group', 'aria-label': alertItems.join('；'), onClick: advanceTokenCube },
+      h('span', { className: 'dr-alert-cube__rotor', 'aria-hidden': true },
+        [0, 1, 2, 3].map((i) => h('span', {
+          key: i,
+          className: 'dr-alert-cube__face dr-alert-cube__face--' + i + (i >= alertItems.length ? ' is-duplicate' : ''),
+        }, '⚠ ' + alertItems[i % alertItems.length]))))
+    : alertItems.map((a, i) => h('span', { key: i, className: 'ddr-alert' }, '⚠ ' + a));
   let body;
   if (!st) {
     body = h('p', { className: 'ddr-empty' }, snap.refreshError ? '暂时无法连接简报服务：' + snap.refreshError : '加载中…');
@@ -438,11 +507,12 @@ function MorningCard({ store, anchorRef, onClose }) {
       card.fallbackNote ? h('p', { className: 'ddr-note ddr-fallback', role: 'status' }, card.fallbackNote) : null,
       l1.oneLiner ? h('p', { className: 'ddr-one' }, l1.oneLiner) : null,
       alertItems.length || usageNode ? h('div', { className: 'ddr-alerts' },
-        alertItems.map((a, i) => h('span', { key: i, className: 'ddr-alert' }, '⚠ ' + a)),
+        alertNode,
         usageNode) : null,
       typeof l1.discovery === 'string' && l1.discovery.trim() && (l1.discoveryLinked !== true || l1.bili)
-        ? h('aside', { className: 'ddr-discovery', 'aria-label': '每日发现' }, h('b', null, '每日发现：'), l1.discovery,
-          l1.discoveryLinked === true ? h('span', { className: 'ddr-discovery-linked' }, '插件联动') : null) : null,
+        ? h('aside', { className: 'ddr-discovery', 'aria-label': '每日发现' }, h('b', null, '每日发现：'), discoveryCut,
+          l1.discoveryLinked === true ? h('span', { className: 'ddr-discovery-linked' }, '插件联动') : null,
+          discoveryMore) : null,
       (l1.festival || (card.carryOver && card.carryOver.length)) ? h('div', { className: 'ddr-carry' },
         l1.festival
           ? h('h4', { className: 'ddr-fest-row' },
@@ -540,7 +610,7 @@ function Viewer({ store }) {
   if (!v) return null;
   // Only our nonce-authorized click bridge may run; imported scripts stay blocked.
   const interactive = !!v.sessionIds?.length;
-  const safeHtml = reportFrameHtml(v.html, frameTheme, bridgeToken, interactive);
+  const safeHtml = reportFrameHtml(v.html, frameTheme, bridgeToken, interactive, v.focus);
   const frameKey = String(v.id ?? v.key ?? '') + '\n' + safeHtml;
   return ReactDOM.createPortal(h('div', { key: v.id ?? v.html, className: 'ddr-root ddr-viewer', role: 'dialog', 'aria-modal': true, 'aria-label': v.title },
     h('div', { className: 'ddr-viewer-mask', ref: mask, onClick: requestClose, 'aria-hidden': true }),
@@ -554,7 +624,7 @@ function Viewer({ store }) {
       snap.error ? h('p', { className: 'ddr-note ddr-err ddr-viewer-status', role: 'alert' }, snap.error) : null,
       frameError === frameKey ? h('p', { className: 'ddr-note ddr-err ddr-viewer-status', role: 'alert' }, '报告视图载入失败，可关闭后重试，或使用上方按钮打开报告。') : null,
       loaded !== frameKey && frameError !== frameKey ? h('p', { className: 'ddr-note ddr-viewer-status', role: 'status' }, '正在载入报告…') : null,
-      h('iframe', { key: frameKey, title: v.title, ref: frame, sandbox: interactive ? 'allow-scripts' : '', referrerPolicy: 'no-referrer', srcDoc: safeHtml, onLoad: () => setLoaded(frameKey), onError: () => setFrameError(frameKey) })))), document.body);
+      h('iframe', { key: frameKey, title: v.title, ref: frame, sandbox: interactive || v.focus === 'discovery' ? 'allow-scripts' : '', referrerPolicy: 'no-referrer', srcDoc: safeHtml, onLoad: () => setLoaded(frameKey), onError: () => setFrameError(frameKey) })))), document.body);
 }
 
 /* ---------------------------------------------------------------- settings */

@@ -192,9 +192,11 @@ test('morning card puts tokens beside the alert pill and shows the report genera
   assert.match(text(row), /连续 1h07m 未休息/);
   assert.match(text(row), /6822 万 tokens/);
   assert.match(text(row), /▲ \+12%/);
-  // 花费不再挤在同一行，挪进 title，等着鼠标悬停才出现。
+  // 花费不挤在这一行，也不再靠悬停露出：写进 aria-label，读屏仍可读到。
   assert.doesNotMatch(text(row), /（约 ¥19\.58）/);
-  assert.match(nodes(row).find((n) => n.props.className === 'ddr-usage').props.title, /¥19\.58/);
+  const usageLine = nodes(row).find((n) => n.props.className === 'ddr-usage');
+  assert.equal(usageLine.props.title, undefined, 'no hover tooltip on the usage line');
+  assert.match(usageLine.props['aria-label'], /¥19\.58/);
   assert.doesNotMatch(text(tree), /9 个会话/, 'card keeps only tokens and cost of the usage line');
   assert.doesNotMatch(text(tree), /580 次工具/);
   assert.match(text(tree), /生成 12\.3 万 tokens（¥0\.12）/);
@@ -343,6 +345,58 @@ test('morning card adds inline session buttons only for known sources and condit
     tree = render(api.MorningCard, { store, anchorRef: {}, onClose() {} });
     assert.doesNotMatch(text(tree), /每日发现/);
   }
+});
+
+test('report frame scrolls to the discovery only when the card asked for it', () => {
+  const { api } = harness();
+  const focused = api.reportFrameHtml('<aside class="discovery"><p>x</p></aside>', '', 'tok', true, 'discovery');
+  assert.match(focused, /querySelector\("\.discovery"\)/);
+  assert.match(focused, /scrollIntoView\(\{block:"start",behavior:"auto"\}\)/);
+  assert.match(focused, /nonce="tok"/);
+  assert.doesNotMatch(api.reportFrameHtml('<aside class="discovery">x</aside>', '', 'tok', true), /scrollIntoView/);
+  // 没有会话的报告没有会话桥，但仍允许我们自己的 nonce 脚本把视图滚到每日发现。
+  const noBridge = api.reportFrameHtml('<aside class="discovery">x</aside>', '', 'tok', false, 'discovery');
+  assert.match(noBridge, /scrollIntoView/);
+  assert.match(noBridge, /script-src 'nonce-tok'/);
+  assert.doesNotMatch(noBridge, /ddr-open-session/);
+});
+
+test('viewer carries the discovery focus request from the card into the frame', async () => {
+  const { api } = harness();
+  const store = api.makeStore({ rpc: { call: async () => ({ ok: true, value: { html: '<aside class="discovery"><p>x</p></aside>' } }) } });
+  await store.view('daily', '2026-11-13', 'Daily', null, 'discovery');
+  assert.equal(store.get().viewer.focus, 'discovery');
+  await store.view('daily', '2026-11-13', 'Daily', null);
+  assert.equal(store.get().viewer.focus, null);
+  store.dispose();
+});
+
+test('morning card previews the discovery in 60 characters and links into the report', () => {
+  global.document = { body: {} };
+  const { api, render } = harness();
+  const long = '甲'.repeat(40) + '乙'.repeat(40);
+  const card = { key: '2026-11-13', label: '11月13日 周五', layer1: { discovery: long } };
+  const calls = [];
+  const store = mockStore({ config: {}, card }, { view: (...args) => { calls.push(args); } });
+  const tree = render(api.MorningCard, { store, anchorRef: { current: null }, onClose() {} });
+  const aside = nodes(tree).find((n) => n.props.className === 'ddr-discovery');
+  assert.ok(aside, 'the discovery stays on the card');
+  const preview = '甲'.repeat(40) + '乙'.repeat(19) + '…';
+  assert.equal(preview.length, 60);
+  assert.ok(text(aside).includes(preview), 'preview keeps the first 59 characters plus an ellipsis');
+  assert.doesNotMatch(text(aside), /乙{21}/, 'the tail is left to the report');
+  const more = nodes(aside).find((n) => n.props.className === 'ddr-discovery-more');
+  assert.ok(more, 'a rounded button jumps to the full discovery');
+  assert.equal(text(more), '详细内容→');
+  assert.equal(more.props['aria-label'], '在完整报告里查看每日发现');
+  more.props.onClick({ currentTarget: 'trigger' });
+  assert.deepEqual(calls[0], ['daily', '2026-11-13', 'DSH 每日简报 · 11月13日 周五', 'trigger', 'discovery']);
+
+  // 60 字以内不截断，也就不需要跳转按钮。
+  card.layer1 = { discovery: '短发现' };
+  const short = render(api.MorningCard, { store, anchorRef: { current: null }, onClose() {} });
+  assert.ok(text(short).includes('短发现'));
+  assert.ok(!nodes(short).some((n) => n.props.className === 'ddr-discovery-more'));
 });
 
 test('native session navigation closes report and card on success, but preserves them on failure', async () => {

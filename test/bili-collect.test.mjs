@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 const root = mkdtempSync(path.join(tmpdir(), 'ddr-bili-'))
 process.env.DSH_DAILY_REPORT_DIR = path.join(root, 'report')
-const { foldBiliDay, collectBiliDay, discoverBiliStore, readBiliMetadata, isContextActive, areBiliSourcesActive } = await import('../lib/collect/bili.js')
+const { foldBiliDay, collectBiliDay, discoverBiliStore, readBiliMetadata, projectBiliTotals, isContextActive, areBiliSourcesActive } = await import('../lib/collect/bili.js')
 const { enrichDailyBili, generateDaily } = await import('../lib/engine.js')
 const store = await import('../lib/store.js')
 const { normalizeConfig } = await import('../lib/config.js')
@@ -160,10 +160,30 @@ test('real SQLite adapter projects only exact mapping and numeric fields; databa
   assert.equal(metadata.lines.length, 2)
   assert.equal(JSON.stringify(metadata).includes('DO-NOT-READ'), false)
   assert.equal(fold(metadata).netSavedTokens, 750)
+  assert.equal(metadata.totals.length, 1)
+  assert.deepEqual(projectBiliTotals(metadata), { gross: 900, net: 750 })
+  assert.equal(fold(metadata).totalNetSavedTokens, 750, 'lifetime total matches the same ledger sum bili-c shows')
   assert.deepEqual(readFileSync(dbFile), before)
-  assert.deepEqual(await readBiliMetadata(dbFile, ['not-mapped']), { mappings: [], lines: [], folds: [] })
+  const unmapped = await readBiliMetadata(dbFile, ['not-mapped'])
+  assert.deepEqual(unmapped.mappings, [])
+  assert.deepEqual(unmapped.lines, [])
+  assert.deepEqual(unmapped.folds, [])
+  assert.equal(unmapped.totals.length, 1, 'lifetime totals do not depend on this day\'s session mapping')
   assert.equal((await readBiliMetadata(dbFile, Array.from({ length: 257 }, (_, i) => 's' + i))).error, 'session-limit')
   assert.ok((await readBiliMetadata(path.join(root, 'missing.db'), ['x'])).error)
+})
+
+test('lifetime totals follow the bili-c overview formula over every session fold', () => {
+  const m = { ...ledger(), totals: [...ledger().folds, { S: 300, sigma: 0, T: 20, requestsAfter: 2 }] }
+  const out = foldBiliDay(date, ['dsh-1'], m)
+  assert.equal(out.totalGrossSavedTokens, 900 + 600)
+  assert.equal(out.totalNetSavedTokens, 750 + 580)
+  assert.match(out.coverage, /累计净省为本地全部会话账本合计/)
+  // Unknown numeric rows must not become a lifetime figure at all.
+  assert.equal(projectBiliTotals({ totals: [{ S: 1, sigma: null, T: 0, requestsAfter: 1 }] }), null)
+  assert.equal(projectBiliTotals({ totals: [{ S: 1, sigma: 1, T: 1, requestsAfter: -1 }] }), null)
+  assert.equal(projectBiliTotals({ totals: [] }), null)
+  assert.equal(projectBiliTotals({}), null)
 })
 
 test('saved daily enrichment is local only, preserves report and never mutates stored data', async () => {

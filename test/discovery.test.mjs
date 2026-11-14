@@ -87,13 +87,16 @@ test('no evidence is represented by null, including empty, literal and non-strin
   assert.equal(result.discovery, null)
 })
 
-test('discovery is bounded, while the user-preserved legacy oneLiner length remains unchanged', async () => {
+test('discovery keeps a complete explanation instead of the old 60-character cut', async () => {
   const longOneLiner = '这是旧模型返回的完整日总结。'.repeat(30)
-  const longDiscovery = '两个项目共享同一套字体检查流程。'.repeat(30)
-  const { result } = await summarize(JSON.stringify({ oneLiner: longOneLiner, discovery: longDiscovery }))
+  // The sentence that used to be cut to 60 characters and lost its reason.
+  const fullDiscovery = '弹窗定位引发的 React 更新循环会触发 Host 停用整个槽位，因此鲸鱼和日报会一起消失；加错误隔离后回归通过，这类问题现在会先降级成一条可见告警。'
+  const { result } = await summarize(JSON.stringify({ oneLiner: longOneLiner, discovery: fullDiscovery }))
   assert.equal(result.oneLiner, longOneLiner)
-  assert.ok(result.discovery.length <= 60)
-  assert.ok(result.discovery.endsWith('…'))
+  assert.equal(result.discovery, fullDiscovery, 'a complete 79-character finding must survive intact')
+  const runaway = (await summarize(JSON.stringify({ oneLiner: longOneLiner, discovery: '两个项目共享同一套字体检查流程。'.repeat(30) }))).result
+  assert.equal(runaway.discovery.length, 240, 'only runaway output is trimmed, as a guard')
+  assert.ok(runaway.discovery.endsWith('…'))
 })
 
 test('exact summary and todo repetitions are suppressed rather than displayed as discoveries', async () => {

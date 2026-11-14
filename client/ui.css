@@ -27,6 +27,9 @@
 .ddr-discovery{margin:10px 0 0;padding:8px 10px;font-size:12px;line-height:19px;color:var(--dsw-alias-label-secondary);border-left:2px solid var(--dsw-alias-brand-primary-new-colorprimary-new-color,#5686fe);border-radius:0 6px 6px 0;background:var(--dsw-alias-interactive-bg-hover);overflow-wrap:anywhere}
 .ddr-discovery b{font-weight:500;color:var(--dsw-alias-label-primary)}
 .ddr-discovery-linked{display:inline-block;margin-left:6px;padding:0 5px;border-radius:4px;color:var(--dsw-alias-brand-primary-new-colorprimary-new-color,var(--dsw-alias-brand-primary));background:color-mix(in srgb,var(--dsw-alias-brand-primary-new-colorprimary-new-color,var(--dsw-alias-brand-primary)) 12%,transparent);font-size:10px;line-height:1.5;white-space:nowrap;vertical-align:baseline}
+.ddr-discovery-more{display:inline-flex;align-items:center;margin-left:8px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:transparent;color:var(--dsw-alias-brand-primary-new-colorprimary-new-color,var(--dsw-alias-brand-primary));font:inherit;font-size:11px;line-height:18px;cursor:pointer;white-space:nowrap;vertical-align:baseline}
+.ddr-discovery-more:hover{background:var(--dsw-alias-interactive-bg-hover);border-color:currentColor}
+.ddr-discovery-more:focus-visible{outline:2px solid currentColor;outline-offset:2px}
 .ddr-session-link{margin-left:6px;padding:0 6px;border:.5px solid var(--dsw-alias-border-l2);border-radius:5px;background:none;color:var(--dsw-alias-brand-primary-new-colorprimary-new-color,#5686fe);font:inherit;font-size:11px;line-height:20px;cursor:pointer;white-space:nowrap;vertical-align:baseline}
 .ddr-session-link:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .ddr-session-link:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:2px}
@@ -38,32 +41,68 @@
 .ddr-usage .ddr-delta{font-variant-numeric:tabular-nums}
 .ddr-usage .ddr-delta.up{color:var(--dsw-alias-state-warn-label)}
 .ddr-usage .ddr-delta.down{color:var(--dsw-alias-state-success-primary)}
-/* Two adjacent faces of an 18px-high cuboid: 4s+ reading time, .5s turns.
-   Both grid faces size the same track, so switching never shifts alert pills. */
-.dr-token-cube{display:inline-grid;flex:0 1 auto;min-width:0;max-width:100%;height:18px;line-height:18px;font-size:12px;color:var(--dsw-alias-label-tertiary);perspective:280px;overflow:hidden;vertical-align:middle}
-.dr-token-cube__rotor{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:18px;min-width:0;max-width:100%;transform-style:preserve-3d;transform:translateZ(-9px) rotateX(0deg);animation:dr-token-cube-turn 10s cubic-bezier(.4,0,.2,1) infinite}
+/* 四面棱柱：tokens 面与 bili 面各两张，按同一方向循环向上翻。
+   每 3s 一个台阶（2.4s 停留 + .6s 翻 90°），12s 走完 0→360°，回到 0° 时与起点同相，
+   不会像两面对翻那样倒着回到原面。点一下可以提前翻到下一面（client 里 seek 动画）。 */
+.dr-token-cube{display:inline-grid;flex:0 1 auto;min-width:0;max-width:100%;height:18px;line-height:18px;font-size:12px;color:var(--dsw-alias-label-tertiary);perspective:280px;overflow:hidden;vertical-align:middle;cursor:pointer;user-select:none}
+.dr-token-cube__rotor{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:18px;min-width:0;max-width:100%;transform-style:preserve-3d;transform:translateZ(-9px) rotateX(0deg);animation:dr-token-cube-turn 12s cubic-bezier(.4,0,.2,1) infinite}
 .dr-token-cube__face{grid-area:1/1;min-width:0;max-width:100%;height:18px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;backface-visibility:hidden;background:var(--dsw-alias-bg-layer-2);font-variant-numeric:tabular-nums}
 .dr-token-cube__face--usage{transform:translateZ(9px)}
-.dr-token-cube__face--bili{transform:rotateX(-90deg) translateZ(9px);font-weight:500;color:var(--dsw-alias-label-secondary)}
+.dr-token-cube__face--usage-back{transform:rotateX(-180deg) translateZ(9px)}
+.dr-token-cube__face--bili{transform:rotateX(-90deg) translateZ(9px)}
+.dr-token-cube__face--bili-back{transform:rotateX(-270deg) translateZ(9px)}
+.dr-token-cube__face--bili,.dr-token-cube__face--bili-back{font-weight:500;color:var(--dsw-alias-label-secondary)}
 .dr-token-cube .ddr-usage{max-width:100%;white-space:nowrap}
 .dr-token-cube .ddr-usage b{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .dr-token-cube .ddr-delta{flex:none}
-@keyframes dr-token-cube-turn{0%,42%{transform:translateZ(-9px) rotateX(0)}47%,92%{transform:translateZ(-9px) rotateX(90deg)}97%,100%{transform:translateZ(-9px) rotateX(0)}}
+@keyframes dr-token-cube-turn{
+  0%,20%{transform:translateZ(-9px) rotateX(0deg)}
+  25%,45%{transform:translateZ(-9px) rotateX(90deg)}
+  50%,70%{transform:translateZ(-9px) rotateX(180deg)}
+  75%,95%{transform:translateZ(-9px) rotateX(270deg)}
+  100%{transform:translateZ(-9px) rotateX(360deg)}
+}
 /* Reset instead of freezing a half-turn; leaving restarts a full reading cycle. */
 @media (prefers-reduced-motion:no-preference){
-  .dr-token-cube[data-hidden=true] .dr-token-cube__rotor,.dr-token-cube[data-paused=true] .dr-token-cube__rotor,.ddr-card:focus-within .dr-token-cube__rotor{animation:none;transform:translateZ(-9px) rotateX(0deg)}
+  .dr-token-cube[data-hidden=true] .dr-token-cube__rotor,.dr-token-cube[data-paused=true] .dr-token-cube__rotor{animation:none;transform:translateZ(-9px) rotateX(0deg)}
 }
-@media (hover:hover) and (prefers-reduced-motion:no-preference){.dr-token-cube:hover .dr-token-cube__rotor{animation:none;transform:translateZ(-9px) rotateX(0deg)}}
 @media (prefers-reduced-motion:reduce){
+  .dr-token-cube{cursor:default}
   .dr-token-cube__rotor{display:flex;align-items:center;gap:4px;animation:none;transform:none;transform-style:flat}
   .dr-token-cube__face--usage{flex:0 1 auto;transform:none}
   .dr-token-cube__face--bili{flex:0 1 auto;transform:none;font-size:11px}
   .dr-token-cube__face--bili::before{content:"· "}
+  .dr-token-cube__face--usage-back,.dr-token-cube__face--bili-back{display:none}
 }
 @supports not (transform-style:preserve-3d){
   .dr-token-cube__rotor{animation:none;transform:none}
   .dr-token-cube__face--usage{transform:none}
-  .dr-token-cube__face--bili{display:none}
+  .dr-token-cube__face--usage-back,.dr-token-cube__face--bili,.dr-token-cube__face--bili-back{display:none}
+}
+/* 告警胶囊也走同一套轮转：多条提醒共用一格宽度（最宽那条），相邻两条交替露出，
+   跟用量排在同一行；点一下同样提前翻面。延迟半个台阶，避免和 token 棱柱同时翻。
+   胶囊底色和面用同一个填充色：翻面时只有文字在转，橙色圆角矩形本身不动、宽度也不变。 */
+.dr-alert-cube{--ddr-alert-fill:color-mix(in srgb,var(--dsw-alias-state-warn-label) 10%,var(--dsw-alias-bg-layer-2,#1f1f1f));display:inline-grid;flex:0 0 auto;min-width:0;max-width:100%;height:20px;line-height:18px;padding:1px 7px;box-sizing:border-box;border-radius:999px;font-size:12px;color:var(--dsw-alias-state-warn-label);background:var(--ddr-alert-fill);perspective:280px;overflow:hidden;vertical-align:middle;cursor:pointer;user-select:none}
+.dr-alert-cube__rotor{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:18px;min-width:0;max-width:100%;transform-style:preserve-3d;transform:translateZ(-9px) rotateX(0deg);animation:dr-token-cube-turn 12s cubic-bezier(.4,0,.2,1) infinite;animation-delay:-1.5s}
+/* 面必须不透明，翻面时近面才能盖住远面；填充色与胶囊一致，转动时看不见矩形边缘。 */
+.dr-alert-cube__face{grid-area:1/1;min-width:0;max-width:100%;height:18px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;backface-visibility:hidden;background:var(--ddr-alert-fill)}
+.dr-alert-cube__face--0{transform:translateZ(9px)}
+.dr-alert-cube__face--1{transform:rotateX(-90deg) translateZ(9px)}
+.dr-alert-cube__face--2{transform:rotateX(-180deg) translateZ(9px)}
+.dr-alert-cube__face--3{transform:rotateX(-270deg) translateZ(9px)}
+@media (prefers-reduced-motion:reduce){
+  .dr-alert-cube{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 6px;height:auto;padding:0;background:none;border-radius:0;overflow:visible;cursor:default}
+  .dr-alert-cube__rotor{display:contents;animation:none;transform:none}
+  .dr-alert-cube__face{display:inline-block;height:auto;padding:1px 7px;border-radius:999px;background:var(--ddr-alert-fill)}
+  .dr-alert-cube__face--0,.dr-alert-cube__face--1,.dr-alert-cube__face--2,.dr-alert-cube__face--3{transform:none}
+  .dr-alert-cube__face.is-duplicate{display:none}
+}
+@supports not (transform-style:preserve-3d){
+  .dr-alert-cube{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 6px;height:auto;padding:0;background:none;border-radius:0;overflow:visible}
+  .dr-alert-cube__rotor{display:contents;animation:none;transform:none}
+  .dr-alert-cube__face{display:inline-block;height:auto;padding:1px 7px;border-radius:999px;background:var(--ddr-alert-fill)}
+  .dr-alert-cube__face--0,.dr-alert-cube__face--1,.dr-alert-cube__face--2,.dr-alert-cube__face--3{transform:none}
+  .dr-alert-cube__face.is-duplicate{display:none}
 }
 .ddr-gen{font-variant-numeric:tabular-nums}
 .ddr-list{margin:8px 0 0;padding:0;list-style:none;display:grid;gap:4px}
